@@ -1,0 +1,59 @@
+{
+  "originHash" : "fcdd28c76fda8f2bdabdec8277307bc2091e52afb16e50236eeb71ca539af72b",
+  "pins" : [
+    {
+      "identity" : "codeeditlanguages",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/CodeEditApp/CodeEditLanguages.git",
+      "state" : {
+        "revision" : "32a1ddcb44d0bcf9bdb41ae426fa1bb7198e62fe",
+        "version" : "0.1.21"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
+      }
+    },
+    {
+      "identity" : "swiftterm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/migueldeicaza/SwiftTerm.git",
+      "state" : {
+        "revision" : "c2fe63d1a244e98a4fbadc7b77b93799ceb97389"
+      }
+    },
+    {
+      "identity" : "swifttreesitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ChimeHQ/SwiftTreeSitter.git",
+      "state" : {
+        "revision" : "08ef81eb8620617b55b08868126707ad72bf754f",
+        "version" : "0.25.0"
+      }
+    },
+    {
+      "identity" : "tree-sitter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter",
+      "state" : {
+        "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+        "version" : "0.25.10"
+      }
+    },
+    {
+      "identity" : "tree-sitter-groovy",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/dekobon/tree-sitter-groovy.git",
+      "state" : {
+        "revision" : "8c70dc650be128673efd6f53bdc0ffba3ba4ce7d",
+        "version" : "0.2.2"
+      }
+    }
+  ],
+  "version" : 3
+}

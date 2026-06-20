@@ -1,0 +1,74 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude running UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude running PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude waiting PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude running PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude error PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude completed Stop"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" claude error StopFailure"
+          }
+        ]
+      }
+    ]
+  }
+}

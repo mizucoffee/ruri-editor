@@ -1,0 +1,192 @@
+name: Release macOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release ruri
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      PROJECT: Ruri.xcodeproj
+      SCHEME: Ruri
+      CONFIGURATION: Release
+      DERIVED_DATA_PATH: /tmp/ruri-derived-data
+      ARTIFACTS_DIR: /tmp/ruri-artifacts
+      APP_NAME: Ruri.app
+      ARCHIVE_NAME: ruri-macos-arm64.zip
+      HOMEBREW_RELEASE_TAG: homebrew-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve release version
+        id: release
+        run: |
+          set -euo pipefail
+
+          marketing_version="$(awk -F'= ' '/MARKETING_VERSION = / { value=$2; sub(/;.*/, "", value); print value; exit }' "$PROJECT/project.pbxproj")"
+          if [[ -z "$marketing_version" ]]; then
+            echo "::error::MARKETING_VERSION was not found."
+            exit 1
+          fi
+
+          IFS='.' read -r major minor _ <<< "$marketing_version"
+          if [[ -z "${major:-}" || -z "${minor:-}" ]]; then
+            echo "::error::MARKETING_VERSION must include major and minor components."
+            exit 1
+          fi
+
+          app_version="${major}.${minor}.${GITHUB_RUN_NUMBER}"
+          release_tag="v${app_version}"
+          commit_short_hash="$(git rev-parse --short=12 HEAD)"
+
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "commit_short_hash=$commit_short_hash" >> "$GITHUB_OUTPUT"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build app
+        env:
+          APP_VERSION: ${{ steps.release.outputs.app_version }}
+          COMMIT_SHORT_HASH: ${{ steps.release.outputs.commit_short_hash }}
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            ARCHS="arm64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION="$APP_VERSION" \
+            RURI_GIT_COMMIT_SHORT_HASH="$COMMIT_SHORT_HASH" \
+            build
+
+      - name: Package app
+        run: |
+          set -euo pipefail
+          app_path="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME"
+
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error::Built app was not found at $app_path"
+            exit 1
+          fi
+
+          codesign --force --deep --sign - "$app_path"
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+
+          mkdir -p "$ARTIFACTS_DIR"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$ARTIFACTS_DIR/$ARCHIVE_NAME"
+
+      - name: Upload packaged app
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ruri-macos-arm64
+          path: ${{ env.ARTIFACTS_DIR }}/${{ env.ARCHIVE_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+          archive: false
+
+      - name: Publish GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          APP_VERSION: ${{ steps.release.outputs.app_version }}
+        run: |
+          set -euo pipefail
+
+          release_notes_file="$RUNNER_TEMP/ruri-release-notes.md"
+          homebrew_notes_file="$RUNNER_TEMP/ruri-homebrew-release-notes.md"
+
+          cat > "$release_notes_file" <<NOTES
+          Unsigned arm64 macOS build of ruri ${APP_VERSION}.
+
+          Homebrew install:
+
+              brew tap mizucoffee/ruri-editor https://github.com/mizucoffee/ruri-editor.git
+              brew install --cask mizucoffee/ruri-editor/ruri
+
+          Code signing and notarization are not applied by this workflow.
+          NOTES
+
+          cat > "$homebrew_notes_file" <<'NOTES'
+          Homebrew latest channel for ruri.
+
+          This release is updated by the public release workflow so the
+          in-repository Homebrew cask can install the latest unsigned arm64
+          macOS build.
+          NOTES
+
+          upsert_release() {
+            local tag="$1"
+            local title="$2"
+            local notes_file="$3"
+            local latest_mode="$4"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" "$ARTIFACTS_DIR/$ARCHIVE_NAME" --clobber
+              gh release edit "$tag" --title "$title" --notes-file "$notes_file"
+              if [[ "$latest_mode" == "latest" ]]; then
+                gh release edit "$tag" --latest
+              else
+                gh release edit "$tag" --latest=false
+              fi
+            else
+              args=(
+                release create "$tag" "$ARTIFACTS_DIR/$ARCHIVE_NAME"
+                --target "$GITHUB_SHA"
+                --title "$title"
+                --notes-file "$notes_file"
+              )
+
+              if [[ "$latest_mode" == "latest" ]]; then
+                args+=(--latest)
+              else
+                args+=(--latest=false)
+              fi
+
+              gh "${args[@]}"
+            fi
+          }
+
+          upsert_release "$HOMEBREW_RELEASE_TAG" "Homebrew latest" "$homebrew_notes_file" "not-latest"
+          upsert_release "$RELEASE_TAG" "$RELEASE_TAG" "$release_notes_file" "latest"
+
+      - name: Write workflow summary
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          APP_VERSION: ${{ steps.release.outputs.app_version }}
+          COMMIT_SHORT_HASH: ${{ steps.release.outputs.commit_short_hash }}
+        run: |
+          {
+            echo "## ruri macOS release"
+            echo
+            echo "- Artifact: [$ARCHIVE_NAME]($ARTIFACT_URL)"
+            echo "- App version: $APP_VERSION"
+            echo "- Commit: $COMMIT_SHORT_HASH"
+            echo "- Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+            echo "- Homebrew asset: https://github.com/$GITHUB_REPOSITORY/releases/download/$HOMEBREW_RELEASE_TAG/$ARCHIVE_NAME"
+            echo "- Homebrew tap: \`brew tap mizucoffee/ruri-editor https://github.com/mizucoffee/ruri-editor.git\`"
+            echo "- Homebrew install: \`brew install --cask mizucoffee/ruri-editor/ruri\`"
+            echo "- Configuration: $CONFIGURATION"
+            echo "- Architecture: arm64"
+            echo "- Code signing and notarization are not applied by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" codex running UserPromptSubmit",
+            "statusMessage": "Updating ruri agent status"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" codex running PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" codex waiting PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" codex running PostToolUse"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${RURI_AGENT_STATUS_HOOK:-$(git rev-parse --show-toplevel)/Ruri/Resources/Scripts/ruri-agent-status-hook.sh}\" codex completed Stop"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,143 @@
+//
+//  WorktreeInitializationStore.swift
+//  ruri
+//
+
+import Foundation
+
+nonisolated protocol WorktreeInitializationStoring: Sendable {
+    func load(metadataDirectoryURL: URL) async -> WorktreeInitializationDocument
+    func save(
+        _ document: WorktreeInitializationDocument,
+        metadataDirectoryURL: URL,
+        repositoryRootURL: URL?
+    ) async throws
+}
+
+nonisolated struct WorktreeInitializationStore: WorktreeInitializationStoring, Sendable {
+    private static let fileName = "worktree-initialization.json"
+    private static let ruriExcludeLine = ".ruri/"
+
+    nonisolated init() {}
+
+    nonisolated func load(metadataDirectoryURL: URL) async -> WorktreeInitializationDocument {
+        await Task.detached(priority: .utility) {
+            let fileURL = metadataDirectoryURL
+                .standardizedFileURL
+                .appending(path: Self.fileName)
+            return Self.loadDocument(from: fileURL).worktreeInitializationDocument
+        }.value
+    }
+
+    nonisolated func save(
+        _ document: WorktreeInitializationDocument,
+        metadataDirectoryURL: URL,
+        repositoryRootURL: URL?
+    ) async throws {
+        try await Task.detached(priority: .utility) {
+            let metadataDirectoryURL = metadataDirectoryURL.standardizedFileURL
+            let fileURL = metadataDirectoryURL.appending(path: Self.fileName)
+            let fileManager = FileManager.default
+
+            try fileManager.createDirectory(
+                at: metadataDirectoryURL,
+                withIntermediateDirectories: true
+            )
+
+            try Self.saveDocument(
+                WorktreeInitializationCodableDocument(document),
+                to: fileURL
+            )
+
+            if let repositoryRootURL,
+               Self.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
+                try Self.ensureRuriDirectoryIsLocallyExcluded(in: repositoryRootURL)
+            }
+        }.value
+    }
+
+    private nonisolated static func loadDocument(from fileURL: URL) -> WorktreeInitializationCodableDocument {
+        guard let data = try? Data(contentsOf: fileURL),
+              let document = try? JSONDecoder().decode(WorktreeInitializationCodableDocument.self, from: data) else {
+            return WorktreeInitializationCodableDocument(version: 1, initializationCommand: "")
+        }
+
+        return document
+    }
+
+    private nonisolated static func saveDocument(
+        _ document: WorktreeInitializationCodableDocument,
+        to fileURL: URL
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(document)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    private nonisolated static func ensureRuriDirectoryIsLocallyExcluded(in repositoryRootURL: URL) throws {
+        let excludeURL = repositoryRootURL
+            .standardizedFileURL
+            .appending(path: ".git/info/exclude")
+        let fileManager = FileManager.default
+        let excludeDirectoryURL = excludeURL.deletingLastPathComponent()
+
+        guard fileManager.fileExists(atPath: excludeDirectoryURL.path(percentEncoded: false)) else {
+            return
+        }
+
+        let existingText = (try? String(contentsOf: excludeURL, encoding: .utf8)) ?? ""
+        let lines = existingText
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+
+        guard !lines.contains(Self.ruriExcludeLine) else { return }
+
+        var updatedText = existingText
+        if !updatedText.isEmpty && !updatedText.hasSuffix("\n") {
+            updatedText.append("\n")
+        }
+        updatedText.append("\(Self.ruriExcludeLine)\n")
+        try updatedText.write(to: excludeURL, atomically: true, encoding: .utf8)
+    }
+
+    private nonisolated static func isDescendantOrSame(_ url: URL, of rootURL: URL) -> Bool {
+        let path = normalizedPath(url)
+        let rootPath = normalizedPath(rootURL)
+
+        if path == rootPath {
+            return true
+        }
+
+        let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
+        return path.hasPrefix(rootPathPrefix)
+    }
+
+    private nonisolated static func normalizedPath(_ url: URL) -> String {
+        var path = NSString(string: url.standardizedFileURL.path(percentEncoded: false)).standardizingPath
+
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path
+    }
+}
+
+nonisolated private struct WorktreeInitializationCodableDocument: Codable {
+    var version: Int
+    var initializationCommand: String
+
+    init(version: Int, initializationCommand: String) {
+        self.version = version
+        self.initializationCommand = initializationCommand
+    }
+
+    init(_ document: WorktreeInitializationDocument) {
+        version = 1
+        initializationCommand = document.initializationCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var worktreeInitializationDocument: WorktreeInitializationDocument {
+        WorktreeInitializationDocument(initializationCommand: initializationCommand)
+    }
+}

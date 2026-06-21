@@ -269,6 +269,59 @@ final class EditorRuntimeStoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rulerView.requiredThickness, 36)
     }
 
+    func testDocumentRuntimeConfiguresDiffScroller() throws {
+        let store = EditorRuntimeStore()
+        let workspaceID = URL(filePath: "/tmp/ruri")
+        let tab = makeTab(url: URL(filePath: "/tmp/ruri/First.swift"), text: "one\ntwo\nthree\n")
+        let runtime = store.runtime(
+            workspaceID: workspaceID,
+            tab: tab,
+            session: EditorDocumentSession()
+        )
+
+        let diffScroller = try diffScroller(from: runtime)
+
+        XCTAssertEqual(diffScroller.diffDecorations, [])
+        XCTAssertFalse(diffScroller.isHidden)
+    }
+
+    func testUpdatingDiffDecorationsUpdatesDiffScroller() throws {
+        let store = EditorRuntimeStore()
+        let workspaceID = URL(filePath: "/tmp/ruri")
+        let tab = makeTab(url: URL(filePath: "/tmp/ruri/First.swift"), text: "one\ntwo\nthree\n")
+        let runtime = store.runtime(
+            workspaceID: workspaceID,
+            tab: tab,
+            session: EditorDocumentSession()
+        )
+        let diffScroller = try diffScroller(from: runtime)
+        let decorations = [
+            EditorDiffDecoration(lineNumber: 2, kind: .modified),
+            EditorDiffDecoration(lineNumber: 3, kind: .added)
+        ]
+
+        runtime.updateDiffDecorations(decorations)
+
+        XCTAssertEqual(diffScroller.diffDecorations, decorations)
+    }
+
+    func testJumpingToDiffMarkerLineSelectsLineStart() throws {
+        let store = EditorRuntimeStore()
+        let workspaceID = URL(filePath: "/tmp/ruri")
+        let tab = makeTab(url: URL(filePath: "/tmp/ruri/First.swift"), text: "one\ntwo\nthree\n")
+        let runtime = store.runtime(
+            workspaceID: workspaceID,
+            tab: tab,
+            session: EditorDocumentSession()
+        )
+        let textView = try textView(from: runtime)
+
+        runtime.jumpToLine(3)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 8, length: 0))
+    }
+
     func testLineNumberRulerWidthExpandsForLargerLineCounts() throws {
         let store = EditorRuntimeStore()
         let workspaceID = URL(filePath: "/tmp/ruri")
@@ -1113,6 +1166,10 @@ final class EditorRuntimeStoreTests: XCTestCase {
 
     private func textView(from runtime: EditorDocumentRuntime) throws -> NSTextView {
         try XCTUnwrap(runtime.scrollView.documentView as? NSTextView)
+    }
+
+    private func diffScroller(from runtime: EditorDocumentRuntime) throws -> EditorDiffScroller {
+        try XCTUnwrap(runtime.scrollView.verticalScroller as? EditorDiffScroller)
     }
 
     private func insert(_ text: String, in textView: NSTextView) {

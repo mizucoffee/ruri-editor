@@ -25,6 +25,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     )
     private let editorLineHeightMultiple: CGFloat = 1.2
     private let textView: RuntimeTextView
+    private let diffScroller: EditorDiffScroller
     private var lineNumberRulerView: EditorLineNumberRulerView? {
         scrollView.verticalRulerView as? EditorLineNumberRulerView
     }
@@ -68,10 +69,12 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         let editorViews = Self.makeEditorViews()
         scrollView = editorViews.scrollView
         textView = editorViews.textView
+        diffScroller = editorViews.diffScroller
 
         super.init()
 
         configure(scrollView: scrollView, textView: textView)
+        configure(diffScroller: diffScroller)
         setText(initialText, registeringUndo: false)
         requestSyntaxHighlighting()
         restoreSelection()
@@ -182,14 +185,17 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         scrollView.tile()
         textView.window?.invalidateCursorRects(for: textView)
         lineNumberRulerView?.invalidateLineNumbers()
+        diffScroller.needsDisplay = true
     }
 
     func updateDiffDecorations(_ decorations: [EditorDiffDecoration]) {
         guard diffDecorations != decorations else { return }
 
         diffDecorations = decorations
+        diffScroller.diffDecorations = decorations
         textView.needsDisplay = true
         lineNumberRulerView?.needsDisplay = true
+        diffScroller.needsDisplay = true
     }
 
     func breakUndoCoalescing() {
@@ -545,6 +551,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         refreshFindMatches(preservingSelectedRange: true)
         lineNumberRulerView?.invalidateLineNumbers()
         textView.needsDisplay = true
+        diffScroller.needsDisplay = true
         scheduleSyntaxHighlighting()
         scheduleUndoCoalescingBreak()
     }
@@ -566,7 +573,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = false
         scrollView.drawsBackground = false
         scrollView.contentView.postsBoundsChangedNotifications = true
 
@@ -591,6 +598,15 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textView.isAutomaticSpellingCorrectionEnabled = false
     }
 
+    private func configure(diffScroller: EditorDiffScroller) {
+        diffScroller.textProvider = { [weak self] in
+            self?.textView.string ?? ""
+        }
+        diffScroller.jumpToLine = { [weak self] lineNumber in
+            self?.jumpToLine(lineNumber)
+        }
+    }
+
     private func setText(_ text: String, registeringUndo: Bool) {
         guard textView.string != text else { return }
 
@@ -613,6 +629,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         resetImplementationHoverState()
         lineNumberRulerView?.invalidateLineNumbers()
         textView.needsDisplay = true
+        diffScroller.needsDisplay = true
     }
 
     private func restoreSelection() {
@@ -645,6 +662,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
             self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
             self.isRestoringScroll = false
             self.lineNumberRulerView?.needsDisplay = true
+            self.diffScroller.needsDisplay = true
         }
     }
 
@@ -654,6 +672,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         session.scrollOrigin = scrollView.contentView.bounds.origin
         delegate?.editorDocumentRuntime(self, didChangeScrollOrigin: session.scrollOrigin)
         lineNumberRulerView?.needsDisplay = true
+        diffScroller.needsDisplay = true
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -662,7 +681,24 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
             self.session.scrollOrigin = self.scrollView.contentView.bounds.origin
             self.delegate?.editorDocumentRuntime(self, didChangeScrollOrigin: self.session.scrollOrigin)
             self.lineNumberRulerView?.needsDisplay = true
+            self.diffScroller.needsDisplay = true
         }
+    }
+
+    func jumpToLine(_ lineNumber: Int) {
+        let targetRange = EditorLineNumbering.lineRange(
+            forLineNumber: lineNumber,
+            in: textView.string as NSString
+        )
+        let selection = NSRange(location: targetRange.location, length: 0)
+            .clamped(toUTF16Length: textView.string.utf16.count)
+
+        isRestoringSelection = true
+        textView.setSelectedRange(selection)
+        isRestoringSelection = false
+        updateSelection()
+        scrollSelectionToVisible()
+        textView.window?.makeFirstResponder(textView)
     }
 
     private func updateSelection() {
@@ -1270,6 +1306,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     private func invalidateSelectedLineHighlight() {
         textView.needsDisplay = true
         lineNumberRulerView?.needsDisplay = true
+        diffScroller.needsDisplay = true
     }
 
     private var defaultTextAttributes: [NSAttributedString.Key: Any] {
@@ -1519,7 +1556,11 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         lineNumberRulerView?.needsDisplay = true
     }
 
-    private static func makeEditorViews() -> (scrollView: NSScrollView, textView: RuntimeTextView) {
+    private static func makeEditorViews() -> (
+        scrollView: NSScrollView,
+        textView: RuntimeTextView,
+        diffScroller: EditorDiffScroller
+    ) {
         let textStorage = NSTextStorage()
         let layoutManager = NSLayoutManager()
         let textContainer = NSTextContainer(
@@ -1534,17 +1575,19 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
 
         let textView = RuntimeTextView(frame: .zero, textContainer: textContainer)
         let scrollView = NSScrollView()
+        let diffScroller = EditorDiffScroller()
         let lineNumberRulerView = EditorLineNumberRulerView(
             scrollView: scrollView,
             textView: textView
         )
 
         scrollView.documentView = textView
+        scrollView.verticalScroller = diffScroller
         scrollView.verticalRulerView = lineNumberRulerView
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
 
-        return (scrollView, textView)
+        return (scrollView, textView, diffScroller)
     }
 
     private func scheduleUndoCoalescingBreak() {

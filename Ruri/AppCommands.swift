@@ -120,7 +120,6 @@ struct AppCommands: Commands {
             Button(AppText.newTerminalTabCommand) {
                 terminalState?.createTab()
             }
-            .keyboardShortcut("t", modifiers: [.command, .shift])
             .disabled(terminalState?.hasActiveWorkspace != true)
 
             Divider()

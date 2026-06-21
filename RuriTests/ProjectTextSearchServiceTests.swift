@@ -27,7 +27,7 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         try "needle in git".write(to: rootURL.appending(path: ".git/HEAD"), atomically: true, encoding: .utf8)
         try "needle in ruri".write(to: rootURL.appending(path: ".ruri/worktree-metadata.json"), atomically: true, encoding: .utf8)
 
-        let response = try await ProjectTextSearchService().search(
+        let response = try await makeSearchService().search(
             projectURL: rootURL,
             options: ProjectTextSearchOptions(query: "needle")
         )
@@ -46,7 +46,7 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         try "target".write(to: rootURL.appending(path: "Sources/AppTests.swift"), atomically: true, encoding: .utf8)
         try "target".write(to: rootURL.appending(path: "Tests/AppTests.swift"), atomically: true, encoding: .utf8)
 
-        let response = try await ProjectTextSearchService().search(
+        let response = try await makeSearchService().search(
             projectURL: rootURL,
             options: ProjectTextSearchOptions(
                 query: "target",
@@ -83,7 +83,7 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         try "needle".write(to: rootURL.appending(path: "Tests/App.swift"), atomically: true, encoding: .utf8)
         try "needle".write(to: rootURL.appending(path: "Tests/Helpers/Helper.swift"), atomically: true, encoding: .utf8)
 
-        let response = try await ProjectTextSearchService().search(
+        let response = try await makeSearchService().search(
             projectURL: rootURL,
             options: ProjectTextSearchOptions(query: "needle")
         )
@@ -108,7 +108,8 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         final todo-456
         """.write(to: rootURL.appending(path: "Notes.txt"), atomically: true, encoding: .utf8)
 
-        let caseSensitiveResponse = try await ProjectTextSearchService().search(
+        let searchService = try makeSearchService()
+        let caseSensitiveResponse = try await searchService.search(
             projectURL: rootURL,
             options: ProjectTextSearchOptions(
                 query: "TODO-\\d+",
@@ -116,7 +117,7 @@ final class ProjectTextSearchServiceTests: XCTestCase {
                 isCaseSensitive: true
             )
         )
-        let caseInsensitiveResponse = try await ProjectTextSearchService().search(
+        let caseInsensitiveResponse = try await searchService.search(
             projectURL: rootURL,
             options: ProjectTextSearchOptions(
                 query: "TODO-\\d+",
@@ -138,7 +139,7 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         try "text".write(to: rootURL.appending(path: "Note.txt"), atomically: true, encoding: .utf8)
 
         do {
-            _ = try await ProjectTextSearchService().search(
+            _ = try await makeSearchService().search(
                 projectURL: rootURL,
                 options: ProjectTextSearchOptions(
                     query: "(",
@@ -153,9 +154,76 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         }
     }
 
+    func testSearchReportsResultLimit() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try """
+        needle
+        needle
+        needle
+        """.write(to: rootURL.appending(path: "Notes.txt"), atomically: true, encoding: .utf8)
+
+        let response = try await makeSearchService().search(
+            projectURL: rootURL,
+            options: ProjectTextSearchOptions(query: "needle"),
+            resultLimit: 2
+        )
+
+        XCTAssertEqual(response.results.count, 2)
+        XCTAssertTrue(response.summary.didHitResultLimit)
+    }
+
+    func testSearchReportsMissingExecutable() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        do {
+            _ = try await ProjectTextSearchService(executableURL: nil).search(
+                projectURL: rootURL,
+                options: ProjectTextSearchOptions(query: "needle")
+            )
+            XCTFail("Expected missing executable error")
+        } catch let error as ProjectTextSearchError {
+            XCTAssertEqual(error, .searchExecutableNotFound)
+        }
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeSearchService() throws -> ProjectTextSearchService {
+        guard let executableURL = ripgrepExecutableURL() else {
+            throw XCTSkip("ripgrep is not available in PATH.")
+        }
+
+        return ProjectTextSearchService(executableURL: executableURL)
+    }
+
+    private func ripgrepExecutableURL() -> URL? {
+        for directory in searchPathDirectories() {
+            let url = URL(filePath: directory).appending(path: "rg")
+            if fileManager.isExecutableFile(atPath: url.path(percentEncoded: false)) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private func searchPathDirectories() -> [String] {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let defaults = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin"
+        ]
+
+        return path
+            .split(separator: ":")
+            .map(String.init) + defaults
     }
 }

@@ -57,6 +57,22 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Install bundled ripgrep
+        env:
+          RIPGREP_VERSION: 15.1.0
+        run: |
+          set -euo pipefail
+
+          archive_name="ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
+          download_url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${archive_name}"
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+
+          mkdir -p Ruri/Resources/Tools
+          curl -fsSL "$download_url" -o "$temp_dir/$archive_name"
+          tar -xzf "$temp_dir/$archive_name" -C "$temp_dir"
+          install -m 0755 "$temp_dir/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin/rg" Ruri/Resources/Tools/rg
+
       - name: Build app
         env:
           APP_VERSION: ${{ steps.release.outputs.app_version }}

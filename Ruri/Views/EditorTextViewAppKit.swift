@@ -648,7 +648,7 @@ final class EditorLineNumberRulerView: NSRulerView {
             return Self.minimumThickness
         }
 
-        let digitCount = max(1, String(Self.lineCount(in: textView.string as NSString)).count)
+        let digitCount = max(1, String(EditorLineNumbering.lineCount(in: textView.string as NSString)).count)
         let sample = String(repeating: "8", count: digitCount) as NSString
         let width = ceil(max(
             sample.size(withAttributes: lineNumberAttributes(for: textView, isSelectedLine: false)).width,
@@ -788,27 +788,6 @@ final class EditorLineNumberRulerView: NSRulerView {
         ]
     }
 
-    private static func lineCount(in string: NSString) -> Int {
-        guard string.length > 0 else { return 1 }
-
-        var lineCount = 1
-        var searchRange = NSRange(location: 0, length: string.length)
-
-        while searchRange.length > 0 {
-            let range = string.range(of: "\n", options: [], range: searchRange)
-            guard range.location != NSNotFound else { break }
-
-            lineCount += 1
-            let nextLocation = NSMaxRange(range)
-            searchRange = NSRange(
-                location: nextLocation,
-                length: string.length - nextLocation
-            )
-        }
-
-        return lineCount
-    }
-
     private static func lineNumber(atCharacterIndex characterIndex: Int, in string: NSString) -> Int {
         guard characterIndex > 0,
               string.length > 0 else {
@@ -835,6 +814,102 @@ final class EditorLineNumberRulerView: NSRulerView {
     }
 }
 
+final class EditorDiffScroller: NSScroller {
+    private static let markerWidth: CGFloat = 4
+    private static let markerMinHeight: CGFloat = 3
+    private static let markerCornerRadius: CGFloat = 1.5
+    private static let verticalInset: CGFloat = 4
+    private static let hitSlop: CGFloat = 4
+
+    var diffDecorations: [EditorDiffDecoration] = [] {
+        didSet {
+            guard oldValue != diffDecorations else { return }
+            needsDisplay = true
+        }
+    }
+    var textProvider: (() -> String)?
+    var jumpToLine: ((Int) -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        for marker in markers() where marker.rect.intersects(dirtyRect) {
+            EditorDiffMarkerStyle.color(for: marker.decoration.kind, appearance: effectiveAppearance).setFill()
+            NSBezierPath(
+                roundedRect: marker.rect,
+                xRadius: Self.markerCornerRadius,
+                yRadius: Self.markerCornerRadius
+            ).fill()
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden,
+              alphaValue > 0,
+              marker(at: point) != nil else {
+            return super.hitTest(point)
+        }
+
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let marker = marker(at: point) else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        jumpToLine?(marker.decoration.lineNumber)
+    }
+
+    private func marker(at point: NSPoint) -> DiffMarker? {
+        markers()
+            .filter { marker in
+                marker.rect.insetBy(dx: -Self.hitSlop, dy: -Self.hitSlop).contains(point)
+            }
+            .min { lhs, rhs in
+                abs(lhs.rect.midY - point.y) < abs(rhs.rect.midY - point.y)
+            }
+    }
+
+    private func markers() -> [DiffMarker] {
+        guard !diffDecorations.isEmpty else { return [] }
+
+        let text = (textProvider?() ?? "") as NSString
+        let lineCount = EditorLineNumbering.lineCount(in: text)
+        let trackHeight = max(0, bounds.height - Self.verticalInset * 2)
+        guard lineCount > 0,
+              trackHeight > 0 else {
+            return []
+        }
+
+        let markerHeight = max(Self.markerMinHeight, min(8, trackHeight / CGFloat(max(lineCount, 1))))
+        return diffDecorations.map { decoration in
+            let clampedLineNumber = min(max(1, decoration.lineNumber), lineCount)
+            let progress = lineCount <= 1 ? 0 : CGFloat(clampedLineNumber - 1) / CGFloat(lineCount - 1)
+            let markerY = Self.verticalInset + progress * max(0, trackHeight - markerHeight)
+            let rect = NSRect(
+                x: bounds.maxX - Self.markerWidth - 3,
+                y: markerY,
+                width: Self.markerWidth,
+                height: markerHeight
+            )
+            return DiffMarker(decoration: decoration, rect: rect)
+        }
+    }
+
+    private struct DiffMarker {
+        let decoration: EditorDiffDecoration
+        let rect: NSRect
+    }
+}
+
 private enum EditorDiffMarkerStyle {
     static func color(
         for kind: EditorDiffDecoration.Kind,
@@ -848,6 +923,51 @@ private enum EditorDiffMarkerStyle {
         case .deleted:
             return .systemRed
         }
+    }
+}
+
+enum EditorLineNumbering {
+    static func lineCount(in string: NSString) -> Int {
+        guard string.length > 0 else { return 1 }
+
+        var lineCount = 1
+        var searchRange = NSRange(location: 0, length: string.length)
+
+        while searchRange.length > 0 {
+            let range = string.range(of: "\n", options: [], range: searchRange)
+            guard range.location != NSNotFound else { break }
+
+            lineCount += 1
+            let nextLocation = NSMaxRange(range)
+            searchRange = NSRange(
+                location: nextLocation,
+                length: string.length - nextLocation
+            )
+        }
+
+        return lineCount
+    }
+
+    static func lineRange(forLineNumber lineNumber: Int, in string: NSString) -> NSRange {
+        let targetLineNumber = min(max(1, lineNumber), lineCount(in: string))
+        guard targetLineNumber > 1,
+              string.length > 0 else {
+            return string.lineRange(for: NSRange(location: 0, length: 0))
+        }
+
+        var currentLineNumber = 1
+        var lineStart = 0
+
+        while currentLineNumber < targetLineNumber, lineStart < string.length {
+            let lineRange = string.lineRange(for: NSRange(location: lineStart, length: 0))
+            let nextLineStart = NSMaxRange(lineRange)
+            guard nextLineStart > lineStart else { break }
+
+            lineStart = nextLineStart
+            currentLineNumber += 1
+        }
+
+        return string.lineRange(for: NSRange(location: min(lineStart, string.length), length: 0))
     }
 }
 

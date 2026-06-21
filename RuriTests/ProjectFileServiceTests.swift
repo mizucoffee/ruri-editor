@@ -408,6 +408,66 @@ final class ProjectFileServiceTests: XCTestCase {
         )
     }
 
+    func testSearchIndexKeepsHigherRankMatchesWhenLowerRankMatchesExceedLimit() {
+        let rootURL = URL(filePath: "/tmp/project")
+        var entries = (0..<120).map { index in
+            ProjectFileSearchEntry(
+                url: rootURL.appending(path: "App/Generated/LowerRank\(index).swift"),
+                fileName: "LowerRank\(index).swift",
+                relativeParentPath: "App/Generated"
+            )
+        }
+        entries.append(
+            ProjectFileSearchEntry(
+                url: rootURL.appending(path: "Sources/ZApp.swift"),
+                fileName: "ZApp.swift",
+                relativeParentPath: "Sources"
+            )
+        )
+
+        let index = ProjectFileSearchIndex(projectURL: rootURL, entries: entries)
+
+        let results = index.search(matching: "app", limit: 1)
+
+        XCTAssertEqual(results.map(\.fileName), ["ZApp.swift"])
+    }
+
+    func testSearchIndexLimitsLargeBroadMatchesInDisplayOrder() {
+        let rootURL = URL(filePath: "/tmp/project")
+        let entries = (0..<150).map { index in
+            ProjectFileSearchEntry(
+                url: rootURL.appending(path: "Sources/App\(String(format: "%03d", index)).swift"),
+                fileName: "App\(String(format: "%03d", index)).swift",
+                relativeParentPath: "Sources"
+            )
+        }
+
+        let index = ProjectFileSearchIndex(projectURL: rootURL, entries: entries.reversed())
+
+        let results = index.search(matching: "app", limit: 100)
+
+        XCTAssertEqual(results.count, 100)
+        XCTAssertEqual(results.first?.fileName, "App000.swift")
+        XCTAssertEqual(results.last?.fileName, "App099.swift")
+    }
+
+    func testSearchIndexReturnsEntryOnlyAtHighestMatchingRank() {
+        let rootURL = URL(filePath: "/tmp/project")
+        let entry = ProjectFileSearchEntry(
+            url: rootURL.appending(path: "App/App.swift"),
+            fileName: "App.swift",
+            relativeParentPath: "App"
+        )
+        let index = ProjectFileSearchIndex(
+            projectURL: rootURL,
+            entries: [entry]
+        )
+
+        let results = index.search(matching: "app")
+
+        XCTAssertEqual(results.map(\.url), [entry.url])
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)

@@ -1777,11 +1777,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
         XCTAssertEqual(editor.projectURL, rootURL.standardizedFileURL)
         XCTAssertFalse(editor.canDeleteWorktree)
         XCTAssertFalse(fileManager.fileExists(atPath: linkedURL.path(percentEncoded: false)))
-        XCTAssertFalse(
-            try runGit(["rev-parse", "--verify", "linked"], in: rootURL)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-        )
+        let branches = try runGit(["branch", "--list", "linked"], in: rootURL)
+        XCTAssertTrue(branches.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     func testDeleteOnlyOpenedLinkedWorktreeClearsProject() async throws {

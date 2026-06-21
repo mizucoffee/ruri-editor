@@ -11,6 +11,7 @@ struct ProjectFileSearchEntry: Identifiable, Equatable, Sendable {
     let normalizedFileName: String
     let relativeParentPath: String
     let normalizedRelativePath: String
+    let isInTestDirectory: Bool
 
     nonisolated init(url: URL, fileName: String, relativeParentPath: String) {
         self.url = url
@@ -19,6 +20,7 @@ struct ProjectFileSearchEntry: Identifiable, Equatable, Sendable {
         self.relativeParentPath = relativeParentPath
         let relativePath = relativeParentPath.isEmpty ? fileName : "\(relativeParentPath)/\(fileName)"
         self.normalizedRelativePath = relativePath.lowercased()
+        self.isInTestDirectory = SearchResultPathPolicy.isDirectoryInTestDirectory(relativeParentPath)
     }
 
     nonisolated var id: URL {
@@ -29,13 +31,10 @@ struct ProjectFileSearchEntry: Identifiable, Equatable, Sendable {
         relativeParentPath.isEmpty ? "." : relativeParentPath
     }
 
-    nonisolated var isInTestDirectory: Bool {
-        SearchResultPathPolicy.isDirectoryInTestDirectory(relativeParentPath)
-    }
 }
 
 struct ProjectFileSearchIndex: Equatable, Sendable {
-    private enum MatchRank: Int {
+    private enum MatchRank: Int, CaseIterable {
         case fileNamePrefix = 0
         case fileNameContains = 1
         case relativePathPrefix = 2
@@ -54,47 +53,51 @@ struct ProjectFileSearchIndex: Equatable, Sendable {
 
     nonisolated func search(
         matching query: String,
-        limit: Int = Self.defaultResultLimit
+        limit: Int = Self.defaultResultLimit,
+        shouldCancel: @Sendable () -> Bool = { false }
     ) -> [ProjectFileSearchEntry] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalizedQuery.isEmpty else { return [] }
+        let resultLimit = max(0, limit)
+        guard !normalizedQuery.isEmpty, resultLimit > 0 else { return [] }
 
-        let matches = entries.compactMap { entry -> (entry: ProjectFileSearchEntry, rank: MatchRank)? in
-            if entry.normalizedFileName.hasPrefix(normalizedQuery) {
-                return (entry, .fileNamePrefix)
+        var buckets = MatchBuckets(limit: resultLimit)
+
+        for (index, entry) in entries.enumerated() {
+            if index.isMultiple(of: 256), shouldCancel() {
+                return []
             }
 
-            if entry.normalizedFileName.contains(normalizedQuery) {
-                return (entry, .fileNameContains)
+            guard let rank = Self.matchRank(for: entry, normalizedQuery: normalizedQuery) else {
+                continue
             }
 
-            if entry.normalizedRelativePath.hasPrefix(normalizedQuery) {
-                return (entry, .relativePathPrefix)
-            }
-
-            if entry.normalizedRelativePath.contains(normalizedQuery) {
-                return (entry, .relativePathContains)
-            }
-
-            return nil
+            buckets.append(entry, rank: rank)
         }
 
-        return Array(
-            matches
-                .sorted { lhs, rhs in
-            if lhs.rank != rhs.rank {
-                return lhs.rank.rawValue < rhs.rank.rawValue
-            }
+        return buckets.results()
+    }
 
-            if lhs.entry.isInTestDirectory != rhs.entry.isInTestDirectory {
-                return !lhs.entry.isInTestDirectory && rhs.entry.isInTestDirectory
-            }
-
-            return Self.sortByDisplayOrder(lhs.entry, rhs.entry)
+    nonisolated private static func matchRank(
+        for entry: ProjectFileSearchEntry,
+        normalizedQuery: String
+    ) -> MatchRank? {
+        if entry.normalizedFileName.hasPrefix(normalizedQuery) {
+            return .fileNamePrefix
         }
-                .prefix(max(0, limit))
-                .map(\.entry)
-        )
+
+        if entry.normalizedFileName.contains(normalizedQuery) {
+            return .fileNameContains
+        }
+
+        if entry.normalizedRelativePath.hasPrefix(normalizedQuery) {
+            return .relativePathPrefix
+        }
+
+        if entry.normalizedRelativePath.contains(normalizedQuery) {
+            return .relativePathContains
+        }
+
+        return nil
     }
 
     nonisolated private static func sortByDisplayOrder(
@@ -112,5 +115,50 @@ struct ProjectFileSearchIndex: Equatable, Sendable {
         }
 
         return lhs.url.path(percentEncoded: false) < rhs.url.path(percentEncoded: false)
+    }
+
+    nonisolated private struct MatchBuckets {
+        private let limit: Int
+        private var nonTestEntriesByRank = Array(repeating: [ProjectFileSearchEntry](), count: MatchRank.allCases.count)
+        private var testEntriesByRank = Array(repeating: [ProjectFileSearchEntry](), count: MatchRank.allCases.count)
+
+        init(limit: Int) {
+            self.limit = limit
+        }
+
+        mutating func append(_ entry: ProjectFileSearchEntry, rank: MatchRank) {
+            let rankIndex = rank.rawValue
+
+            if entry.isInTestDirectory {
+                guard testEntriesByRank[rankIndex].count < limit else { return }
+                testEntriesByRank[rankIndex].append(entry)
+                return
+            }
+
+            guard nonTestEntriesByRank[rankIndex].count < limit else { return }
+            nonTestEntriesByRank[rankIndex].append(entry)
+        }
+
+        func results() -> [ProjectFileSearchEntry] {
+            var results: [ProjectFileSearchEntry] = []
+            results.reserveCapacity(limit)
+
+            for rank in MatchRank.allCases {
+                appendResults(from: nonTestEntriesByRank[rank.rawValue], to: &results)
+                appendResults(from: testEntriesByRank[rank.rawValue], to: &results)
+            }
+
+            return results
+        }
+
+        private func appendResults(
+            from bucket: [ProjectFileSearchEntry],
+            to results: inout [ProjectFileSearchEntry]
+        ) {
+            guard results.count < limit else { return }
+
+            let remainingCapacity = limit - results.count
+            results.append(contentsOf: bucket.prefix(remainingCapacity))
+        }
     }
 }

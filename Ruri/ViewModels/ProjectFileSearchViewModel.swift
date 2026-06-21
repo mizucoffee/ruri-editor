@@ -235,7 +235,9 @@ final class ProjectFileSearchViewModel: ObservableObject {
             }
 
             guard !Task.isCancelled else { return }
-            let results = index.search(matching: query)
+            let results = index.search(matching: query) {
+                Task.isCancelled
+            }
             guard !Task.isCancelled else { return }
 
             await self?.finishSearch(results, query: query, projectURL: activeProjectURL)

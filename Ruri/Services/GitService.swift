@@ -578,6 +578,14 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }), listedWorktree.kind != .linked {
             throw GitWorktreeDeletionError.cannotDeleteMainWorktree(listedWorktree.rootURL)
         }
+        let deletedBranchName = existingWorktrees.compactMap { worktree -> String? in
+            guard FileURLRewriter.urlsMatch(worktree.rootURL, metadata.worktreeRootURL),
+                  case .branch(let branchName) = worktree.branch else {
+                return nil
+            }
+
+            return branchName
+        }.first
 
         let commandRootURL = existingWorktrees.first { worktree in
             worktree.kind == .main
@@ -607,6 +615,25 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
 
         guard result.exitCode == 0 else {
             throw GitWorktreeDeletionError.gitCommandFailed(Self.commandErrorMessage(from: result))
+        }
+
+        if let deletedBranchName {
+            let branchResult: GitCommandResult
+            do {
+                branchResult = try await runGit(
+                    ["branch", "-D", deletedBranchName],
+                    in: commandRootURL,
+                    executableURL: executableURL
+                )
+            } catch GitServiceError.timedOut {
+                throw GitWorktreeDeletionError.timedOut
+            } catch {
+                throw GitWorktreeDeletionError.gitCommandFailed(error.localizedDescription)
+            }
+
+            guard branchResult.exitCode == 0 else {
+                throw GitWorktreeDeletionError.gitCommandFailed(Self.commandErrorMessage(from: branchResult))
+            }
         }
     }
 

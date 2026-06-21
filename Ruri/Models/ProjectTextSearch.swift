@@ -108,6 +108,8 @@ struct ProjectTextSearchResponse: Equatable, Sendable {
 enum ProjectTextSearchError: LocalizedError, Equatable, Sendable {
     case invalidRegularExpression(String)
     case invalidDirectory(String)
+    case searchExecutableNotFound
+    case searchFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -117,6 +119,10 @@ enum ProjectTextSearchError: LocalizedError, Equatable, Sendable {
             path.isEmpty
                 ? "検索ディレクトリを開けません"
                 : "検索ディレクトリを開けません: \(path)"
+        case .searchExecutableNotFound:
+            "全文検索エンジンが見つかりません"
+        case .searchFailed(let message):
+            message.isEmpty ? "全文検索に失敗しました" : "全文検索に失敗しました: \(message)"
         }
     }
 }

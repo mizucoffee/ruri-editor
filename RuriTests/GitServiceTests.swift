@@ -697,7 +697,7 @@ final class GitServiceTests: XCTestCase {
         XCTAssertTrue(fileManager.fileExists(atPath: worktreeURL.appending(path: "Base.txt").path(percentEncoded: false)))
     }
 
-    func testDeleteWorktreeRemovesDirectoryAndKeepsBranch() async throws {
+    func testDeleteWorktreeRemovesDirectoryAndBranch() async throws {
         let parentURL = try makeTemporaryDirectory()
         let rootURL = parentURL.appending(path: "repo", directoryHint: .isDirectory)
         let worktreeURL = parentURL.appending(path: "repo-linked", directoryHint: .isDirectory)
@@ -714,12 +714,8 @@ final class GitServiceTests: XCTestCase {
         try await GitService().deleteWorktree(openedRootURL: worktreeURL)
 
         XCTAssertFalse(fileManager.fileExists(atPath: worktreeURL.path(percentEncoded: false)))
-        XCTAssertEqual(
-            try runGit(["rev-parse", "--verify", "linked"], in: rootURL)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty,
-            false
-        )
+        let branches = try runGit(["branch", "--list", "linked"], in: rootURL)
+        XCTAssertTrue(branches.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
         let worktreeList = try runGit(["worktree", "list", "--porcelain"], in: rootURL)
         XCTAssertFalse(worktreeList.contains(worktreeURL.path(percentEncoded: false)))

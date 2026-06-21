@@ -190,7 +190,7 @@ struct FileTreeView: View {
 
     private func maxContentWidth(in nodes: [FileNode], level: Int) -> CGFloat {
         var width = nodes.reduce(0) { width, node in
-            var nextWidth = max(width, rowWidth(for: node.name, level: level))
+            var nextWidth = max(width, rowWidth(for: node, level: level))
 
             if node.isExpanded {
                 if node.isLoadingChildren {
@@ -215,10 +215,22 @@ struct FileTreeView: View {
         return width
     }
 
+    private func rowWidth(for node: FileNode, level: Int) -> CGFloat {
+        rowWidth(
+            for: node.name,
+            level: level,
+            includesGitBadge: node.isDirectory && gitSnapshot?.hasChangedDescendant(of: node.url) == true
+        )
+    }
+
     private func rowWidth(for name: String, level: Int) -> CGFloat {
+        rowWidth(for: name, level: level, includesGitBadge: false)
+    }
+
+    private func rowWidth(for name: String, level: Int, includesGitBadge: Bool) -> CGFloat {
         let textWidth = textWidth(name)
         let indentation = CGFloat(level) * 14 + 8
-        let gitBadgeWidth: CGFloat = gitSnapshot == nil ? 0 : 20
+        let gitBadgeWidth: CGFloat = includesGitBadge ? 14 : 0
         let rowChromeWidth: CGFloat = 10 + 14 + 15 + 8 + gitBadgeWidth
         return indentation + rowChromeWidth + textWidth + 16
     }
@@ -296,6 +308,7 @@ private struct FileTreeRow: View {
     let beginRename: (FileNode) -> Void
     let commitRename: () -> Void
     let cancelRename: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -439,10 +452,8 @@ private struct FileTreeRow: View {
 
     @ViewBuilder
     private var gitBadge: some View {
-        if let status = gitChange?.displayStatus ?? (isSyntheticGitDeleted ? .deleted : nil) {
-            GitFileTreeStatusBadge(status: status)
-        } else if node.isDirectory,
-                  gitSnapshot?.hasChangedDescendant(of: node.url) == true {
+        if node.isDirectory,
+           gitSnapshot?.hasChangedDescendant(of: node.url) == true {
             Image(systemName: "circle.fill")
                 .font(.system(size: 5, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -482,7 +493,16 @@ private struct FileTreeRow: View {
     }
 
     private var textColor: Color {
-        isSyntheticGitDeleted || node.isIgnored ? .secondary : .primary
+        if !node.isDirectory,
+           let status = gitChange?.displayStatus ?? (isSyntheticGitDeleted ? .deleted : nil) {
+            return IntelliJFileStatusColor.color(for: status, colorScheme: colorScheme)
+        }
+
+        if node.isIgnored {
+            return IntelliJFileStatusColor.ignored(colorScheme: colorScheme)
+        }
+
+        return .primary
     }
 
     private func activateNode() {
@@ -547,32 +567,33 @@ private struct FileTreeRow: View {
     }
 }
 
-private struct GitFileTreeStatusBadge: View {
-    let status: GitFileDisplayStatus
-
-    var body: some View {
-        Text(status.rawValue)
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(color)
-            .frame(width: 14, alignment: .trailing)
-            .help(status.description)
-    }
-
-    private var color: Color {
+private enum IntelliJFileStatusColor {
+    static func color(for status: GitFileDisplayStatus, colorScheme: ColorScheme) -> Color {
+        let isDark = colorScheme == .dark
         switch status {
         case .modified:
-            .orange
-        case .added, .copied:
-            .green
+            return isDark ? color(0x68, 0x97, 0xBB) : color(0x00, 0x32, 0xA0)
+        case .added:
+            return isDark ? color(0x62, 0x97, 0x55) : color(0x0A, 0x77, 0x00)
+        case .copied:
+            return color(0x0A, 0x77, 0x00)
         case .deleted:
-            .red
+            return isDark ? color(0x6C, 0x6C, 0x6C) : color(0x61, 0x61, 0x61)
         case .renamed:
-            .blue
+            return isDark ? color(0x3A, 0x84, 0x84) : color(0x00, 0x7C, 0x7C)
         case .conflicted:
-            .red
+            return isDark ? color(0xD5, 0x75, 0x6C) : color(0xFF, 0x00, 0x00)
         case .untracked:
-            .secondary
+            return isDark ? color(0xD1, 0x67, 0x5A) : color(0x99, 0x33, 0x00)
         }
+    }
+
+    static func ignored(colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? color(0x84, 0x85, 0x04) : color(0x72, 0x72, 0x38)
+    }
+
+    private static func color(_ red: Double, _ green: Double, _ blue: Double) -> Color {
+        Color(red: red / 255, green: green / 255, blue: blue / 255)
     }
 }
 

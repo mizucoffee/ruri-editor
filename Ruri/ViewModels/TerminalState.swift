@@ -131,7 +131,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         publishWorkspaceSnapshots()
     }
 
-    func createTab() {
+    func createTab(requestsFocus: Bool = false) {
         guard let activeWorkspaceID,
               var workspace = workspaces[activeWorkspaceID] else {
             return
@@ -140,6 +140,10 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         let tab = workspace.createTab(shellPath: shellResolver.shellPath())
         workspaces[activeWorkspaceID] = workspace
         _ = ensureRuntime(for: tab.snapshot(), workspaceID: activeWorkspaceID)
+        if requestsFocus {
+            focusRequest = TerminalFocusRequest(tabID: tab.id)
+        }
+        markVisibleSelectedTerminalSeen()
         publishActiveWorkspace()
         publishWorkspaceSnapshots()
     }
@@ -341,6 +345,16 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
             publishActiveWorkspace()
         }
         publishWorkspaceSnapshots()
+    }
+
+    func terminalRuntimeDidRequestNewTab(_ runtime: TerminalRuntime) {
+        guard runtime.workspaceID == activeWorkspaceID else { return }
+        createTab(requestsFocus: true)
+    }
+
+    func terminalRuntimeDidRequestCloseTab(_ runtime: TerminalRuntime) {
+        guard runtime.workspaceID == activeWorkspaceID else { return }
+        requestCloseTab(runtime.tabID)
     }
 
     private func ensureRuntime(

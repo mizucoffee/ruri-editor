@@ -36,7 +36,7 @@ enum AppText {
     static let deleteWorktreeCommand: LocalizedStringKey = "Delete Worktree..."
     static let pullWorktreeCommand: LocalizedStringKey = "Pull Worktree"
     static let deleteWorktreeAlertTitle: LocalizedStringKey = "Delete Worktree?"
-    static let deleteWorktreeAlertMessage: LocalizedStringKey = "The worktree directory will be removed. The branch will stay in the repository."
+    static let deleteWorktreeAlertMessage: LocalizedStringKey = "The worktree directory and local branch will be removed."
     static let createButton: LocalizedStringKey = "Create"
     static let deleteButton: LocalizedStringKey = "Delete"
     static let retryButton: LocalizedStringKey = "Retry"

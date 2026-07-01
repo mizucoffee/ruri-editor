@@ -37,4 +37,17 @@ final class RuriApplicationDelegate: NSObject, NSApplicationDelegate, UNUserNoti
     ) {
         completionHandler([.banner, .sound])
     }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            CodingAgentNotificationRouter.shared.openNotification(
+                userInfo: response.notification.request.content.userInfo
+            )
+            completionHandler()
+        }
+    }
 }

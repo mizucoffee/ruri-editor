@@ -34,9 +34,9 @@ enum SymbolIndexStatusState: Equatable, Sendable {
     var detail: String {
         switch self {
         case .inactive:
-            "No Java or Kotlin symbol index is active for this project."
+            "No Java symbol index is active for this project."
         case .indexing:
-            "Indexing Java and Kotlin symbols."
+            "Preparing Java symbol navigation."
         case .ready(let symbolCount, let fileCount):
             "\(symbolCount) symbol\(symbolCount == 1 ? "" : "s") indexed from \(fileCount) file\(fileCount == 1 ? "" : "s")."
         case .failed(let message):

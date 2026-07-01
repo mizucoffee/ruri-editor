@@ -55,6 +55,20 @@ final class GitHubCLIClientTests: XCTestCase {
         XCTAssertEqual(result, .success(commandResult))
     }
 
+    func testOptionalFeatureCommandReturnsFailedWhenExecutableCannotLaunch() async {
+        let client = GitHubCLIClient(
+            executableURL: URL(filePath: "/tmp/ruri-missing-gh-executable"),
+            commandRunner: ProcessGitHubCommandRunner()
+        )
+
+        let result = await client.runOptionalFeatureCommand(arguments: ["pr", "view"])
+
+        guard case .failed(let message) = result else {
+            return XCTFail("Expected failed result.")
+        }
+        XCTAssertTrue(message.contains("not executable"))
+    }
+
     private func data(_ string: String) -> Data {
         Data(string.utf8)
     }

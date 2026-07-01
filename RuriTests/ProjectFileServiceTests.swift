@@ -183,7 +183,7 @@ final class ProjectFileServiceTests: XCTestCase {
         try "config".write(to: rootURL.appending(path: ".git/Config.swift"), atomically: true, encoding: .utf8)
         try "memo".write(to: rootURL.appending(path: ".ruri/Metadata.swift"), atomically: true, encoding: .utf8)
 
-        let entries = try await ProjectFileService().loadSearchEntries(at: rootURL)
+        let entries = try await makeFileService().loadSearchEntries(at: rootURL)
 
         XCTAssertEqual(Set(entries.map(\.fileName)), Set(["App.swift", "README.md", ".secret.swift"]))
         XCTAssertEqual(entries.first { $0.fileName == "App.swift" }?.relativeParentPath, "Sources")
@@ -210,7 +210,7 @@ final class ProjectFileServiceTests: XCTestCase {
         try "tmp".write(to: rootURL.appending(path: "Docs/skip.tmp"), atomically: true, encoding: .utf8)
         try "nested".write(to: rootURL.appending(path: "Docs/Nested/keep.tmp"), atomically: true, encoding: .utf8)
 
-        let entries = try await ProjectFileService().loadSearchEntries(at: rootURL)
+        let entries = try await makeFileService().loadSearchEntries(at: rootURL)
 
         XCTAssertEqual(Set(entries.map(\.fileName)), Set([".gitignore", "App.swift", "keep.log", "keep.tmp"]))
     }
@@ -231,9 +231,30 @@ final class ProjectFileServiceTests: XCTestCase {
         try "debug".write(to: sourcesURL.appending(path: "debug.log"), atomically: true, encoding: .utf8)
         try "keep".write(to: sourcesURL.appending(path: "keep.log"), atomically: true, encoding: .utf8)
 
-        let entries = try await ProjectFileService().loadSearchEntries(at: rootURL)
+        let entries = try await makeFileService().loadSearchEntries(at: rootURL)
 
         XCTAssertEqual(Set(entries.map(\.fileName)), Set([".gitignore", "App.swift", "keep.log"]))
+    }
+
+    func testLoadSearchEntriesReturnsEmptyEntriesForEmptyDirectory() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let entries = try await makeFileService().loadSearchEntries(at: rootURL)
+
+        XCTAssertEqual(entries, [])
+    }
+
+    func testLoadSearchEntriesReportsMissingSearchExecutable() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        do {
+            _ = try await ProjectFileService(searchExecutableURL: nil).loadSearchEntries(at: rootURL)
+            XCTFail("Expected fileSearchExecutableNotFound")
+        } catch let error as ProjectFileError {
+            XCTAssertEqual(error, .fileSearchExecutableNotFound)
+        }
     }
 
     func testSearchIndexMatchesCaseInsensitivelyAndOrdersPrefixBeforeContains() {
@@ -472,5 +493,37 @@ final class ProjectFileServiceTests: XCTestCase {
         let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeFileService() throws -> ProjectFileService {
+        guard let executableURL = ripgrepExecutableURL() else {
+            throw XCTSkip("ripgrep is not available in PATH.")
+        }
+
+        return ProjectFileService(searchExecutableURL: executableURL)
+    }
+
+    private func ripgrepExecutableURL() -> URL? {
+        for directory in searchPathDirectories() {
+            let url = URL(filePath: directory).appending(path: "rg")
+            if fileManager.isExecutableFile(atPath: url.path(percentEncoded: false)) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private func searchPathDirectories() -> [String] {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let defaults = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin"
+        ]
+
+        return path
+            .split(separator: ":")
+            .map(String.init) + defaults
     }
 }

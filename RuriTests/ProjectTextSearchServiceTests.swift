@@ -36,6 +36,22 @@ final class ProjectTextSearchServiceTests: XCTestCase {
         XCTAssertEqual(response.summary.matchedFileCount, 2)
     }
 
+    func testSearchRespectsGitIgnoreOutsideGitRepository() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try "*.log\n".write(to: rootURL.appending(path: ".gitignore"), atomically: true, encoding: .utf8)
+        try "needle".write(to: rootURL.appending(path: "debug.log"), atomically: true, encoding: .utf8)
+        try "needle".write(to: rootURL.appending(path: "Notes.txt"), atomically: true, encoding: .utf8)
+
+        let response = try await makeSearchService().search(
+            projectURL: rootURL,
+            options: ProjectTextSearchOptions(query: "needle")
+        )
+
+        XCTAssertEqual(response.results.map(\.relativePath), ["Notes.txt"])
+    }
+
     func testSearchAppliesDirectoryAndGlobFileMask() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
@@ -180,6 +196,23 @@ final class ProjectTextSearchServiceTests: XCTestCase {
 
         do {
             _ = try await ProjectTextSearchService(executableURL: nil).search(
+                projectURL: rootURL,
+                options: ProjectTextSearchOptions(query: "needle")
+            )
+            XCTFail("Expected missing executable error")
+        } catch let error as ProjectTextSearchError {
+            XCTAssertEqual(error, .searchExecutableNotFound)
+        }
+    }
+
+    func testSearchReportsLaunchFailureForMissingExecutablePath() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        do {
+            _ = try await ProjectTextSearchService(
+                executableURL: URL(filePath: "/tmp/ruri-missing-rg-executable")
+            ).search(
                 projectURL: rootURL,
                 options: ProjectTextSearchOptions(query: "needle")
             )

@@ -509,6 +509,9 @@ private struct ReviewDiffFileView: View {
     @State private var syntaxHighlights = ReviewDiffSyntaxHighlights.empty
 
     var body: some View {
+        let currentSyntaxHighlightRequestID = syntaxHighlightRequestID
+        let currentSyntaxHighlights = syntaxHighlights.matching(requestID: currentSyntaxHighlightRequestID)
+
         VStack(alignment: .leading, spacing: 0) {
             header
 
@@ -526,7 +529,7 @@ private struct ReviewDiffFileView: View {
                         newFileURL: newFileURL,
                         displayMode: displayMode,
                         wrapLines: wrapLines,
-                        syntaxHighlights: syntaxHighlights,
+                        syntaxHighlights: currentSyntaxHighlights,
                         requestCodeNavigation: requestCodeNavigation,
                         codeNavigationHoverRange: codeNavigationHoverRange
                     )
@@ -541,15 +544,18 @@ private struct ReviewDiffFileView: View {
                 .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
         }
         .task(id: syntaxHighlightRequestID) {
+            syntaxHighlights = .empty
             guard isExpanded else {
-                syntaxHighlights = .empty
                 return
             }
 
-            syntaxHighlights = await ReviewDiffSyntaxHighlighter.highlights(
+            let highlights = await ReviewDiffSyntaxHighlighter.highlights(
                 for: file,
+                requestID: currentSyntaxHighlightRequestID,
                 colorScheme: colorScheme
             )
+            guard !Task.isCancelled else { return }
+            syntaxHighlights = highlights
         }
     }
 
@@ -687,20 +693,29 @@ struct ReviewDiffLineKey: Hashable, Sendable {
     let side: ReviewDiffSyntaxSide
 }
 
-private struct ReviewDiffSyntaxSegment: Equatable, Sendable {
+struct ReviewDiffSyntaxSegment: Equatable, Sendable {
     let text: String
     let role: SyntaxHighlightRole?
 }
 
-private struct ReviewDiffSyntaxLine: Equatable, Sendable {
+struct ReviewDiffSyntaxLine: Equatable, Sendable {
     let segments: [ReviewDiffSyntaxSegment]
 }
 
-private struct ReviewDiffSyntaxHighlights: Sendable {
-    static let empty = ReviewDiffSyntaxHighlights(linesByKey: [:], themeName: "tree-sitter-light")
+struct ReviewDiffSyntaxHighlights: Sendable {
+    static let empty = ReviewDiffSyntaxHighlights(
+        requestID: nil,
+        linesByKey: [:],
+        themeName: "tree-sitter-light"
+    )
 
+    let requestID: Int?
     let linesByKey: [ReviewDiffLineKey: ReviewDiffSyntaxLine]
     let themeName: String
+
+    func matching(requestID: Int) -> ReviewDiffSyntaxHighlights {
+        self.requestID == requestID ? self : .empty
+    }
 
     func line(for key: ReviewDiffLineKey) -> ReviewDiffSyntaxLine? {
         linesByKey[key]
@@ -722,6 +737,7 @@ private struct ReviewDiffSyntaxHighlights: Sendable {
 private enum ReviewDiffSyntaxHighlighter {
     static func highlights(
         for file: GitReviewFileDiff,
+        requestID: Int,
         colorScheme: ColorScheme
     ) async -> ReviewDiffSyntaxHighlights {
         guard !file.isBinary,
@@ -752,7 +768,11 @@ private enum ReviewDiffSyntaxHighlighter {
         linesByKey.merge(syntaxLines(for: oldDocument, runs: oldRuns)) { current, _ in current }
         linesByKey.merge(syntaxLines(for: newDocument, runs: newRuns)) { current, _ in current }
 
-        return ReviewDiffSyntaxHighlights(linesByKey: linesByKey, themeName: themeName)
+        return ReviewDiffSyntaxHighlights(
+            requestID: requestID,
+            linesByKey: linesByKey,
+            themeName: themeName
+        )
     }
 
     private static func languageName(for relativePath: String?) -> String? {
@@ -1493,7 +1513,7 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         scrollView.hasHorizontalScroller = !wrapLines
         textView.update(
             document: document,
-            attributedString: Self.attributedString(
+            attributedString: ReviewDiffAttributedStringBuilder.attributedString(
                 for: document,
                 syntaxHighlights: syntaxHighlights
             ),
@@ -1630,7 +1650,10 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         return gutterWidth
     }
 
-    private static func attributedString(
+}
+
+enum ReviewDiffAttributedStringBuilder {
+    static func attributedString(
         for document: ReviewDiffRenderedDocument,
         syntaxHighlights: ReviewDiffSyntaxHighlights
     ) -> NSAttributedString {
@@ -1653,6 +1676,8 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         for line in document.lines {
             switch line.kind {
             case .hunkHeader:
+                let range = line.contentRange.clamped(toUTF16Length: attributedString.length)
+                guard range.length > 0 else { continue }
                 attributedString.addAttributes(
                     [
                         .foregroundColor: NSColor.secondaryLabelColor,
@@ -1661,35 +1686,46 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
                             weight: .medium
                         )
                     ],
-                    range: line.contentRange
+                    range: range
                 )
 
             case .placeholder:
+                let range = line.contentRange.clamped(toUTF16Length: attributedString.length)
+                guard range.length > 0 else { continue }
                 attributedString.addAttribute(
                     .foregroundColor,
                     value: NSColor.clear,
-                    range: line.contentRange
+                    range: range
                 )
 
             case .context, .addition, .deletion:
-                guard let syntaxLine = line.syntaxLine(in: syntaxHighlights) else {
+                let lineRange = line.contentRange.clamped(toUTF16Length: attributedString.length)
+                guard lineRange.length > 0,
+                      let syntaxLine = line.syntaxLine(in: syntaxHighlights) else {
                     continue
                 }
-                var cursor = line.contentRange.location
+                var cursor = lineRange.location
+                let lineEnd = NSMaxRange(lineRange)
                 for segment in syntaxLine.segments {
+                    guard cursor < lineEnd else { break }
                     let length = segment.text.utf16.count
                     guard length > 0 else { continue }
+                    let segmentRange = NSRange(
+                        location: cursor,
+                        length: min(length, lineEnd - cursor)
+                    ).clamped(toUTF16Length: attributedString.length)
                     if let role = segment.role {
+                        guard segmentRange.length > 0 else { continue }
                         attributedString.addAttribute(
                             .foregroundColor,
                             value: SyntaxHighlightPalette.color(
                                 for: role,
                                 themeName: syntaxHighlights.themeName
                             ),
-                            range: NSRange(location: cursor, length: length)
+                            range: segmentRange
                         )
                     }
-                    cursor += length
+                    cursor = NSMaxRange(segmentRange)
                 }
             }
         }
@@ -1788,9 +1824,21 @@ private final class ReviewDiffTextGutterView: NSView {
         }
 
         layoutManager.ensureLayout(for: textContainer)
-        for line in visibleLines(in: textView, layoutManager: layoutManager, textContainer: textContainer) {
-            drawBackground(for: line, in: textView, layoutManager: layoutManager, textContainer: textContainer)
-            drawGutter(for: line, in: textView, layoutManager: layoutManager, textContainer: textContainer)
+        for line in document.lines {
+            drawBackground(
+                for: line,
+                dirtyRect: dirtyRect,
+                in: textView,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
+            drawGutter(
+                for: line,
+                dirtyRect: dirtyRect,
+                in: textView,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
         }
     }
 
@@ -1810,6 +1858,7 @@ private final class ReviewDiffTextGutterView: NSView {
 
     private func drawBackground(
         for line: ReviewDiffRenderedLine,
+        dirtyRect: NSRect,
         in textView: ReviewDiffTextView,
         layoutManager: NSLayoutManager,
         textContainer: NSTextContainer
@@ -1819,12 +1868,16 @@ private final class ReviewDiffTextGutterView: NSView {
 
         color.setFill()
         for rect in visualRects(for: line, in: textView, layoutManager: layoutManager, textContainer: textContainer) {
-            NSRect(x: bounds.minX, y: rect.minY, width: bounds.width, height: rect.height).fill()
+            let backgroundRect = NSRect(x: bounds.minX, y: rect.minY, width: bounds.width, height: rect.height)
+            if backgroundRect.intersects(dirtyRect) {
+                backgroundRect.fill()
+            }
         }
     }
 
     private func drawGutter(
         for line: ReviewDiffRenderedLine,
+        dirtyRect: NSRect,
         in textView: ReviewDiffTextView,
         layoutManager: NSLayoutManager,
         textContainer: NSTextContainer
@@ -1837,6 +1890,7 @@ private final class ReviewDiffTextGutterView: NSView {
         ).first else {
             return
         }
+        guard rect.intersects(dirtyRect) else { return }
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(
@@ -1907,32 +1961,6 @@ private final class ReviewDiffTextGutterView: NSView {
             ),
             withAttributes: attributes
         )
-    }
-
-    private func visibleLines(
-        in textView: ReviewDiffTextView,
-        layoutManager: NSLayoutManager,
-        textContainer: NSTextContainer
-    ) -> [ReviewDiffRenderedLine] {
-        let visibleTextRect = textView.visibleRect
-        let visibleContainerRect = NSRect(
-            x: visibleTextRect.minX - textView.textContainerOrigin.x,
-            y: visibleTextRect.minY - textView.textContainerOrigin.y,
-            width: visibleTextRect.width,
-            height: visibleTextRect.height
-        )
-        let glyphRange = layoutManager.glyphRange(
-            forBoundingRect: visibleContainerRect,
-            in: textContainer
-        )
-        let characterRange = layoutManager.characterRange(
-            forGlyphRange: glyphRange,
-            actualGlyphRange: nil
-        )
-        return document.lines.filter { line in
-            NSIntersectionRange(line.contentRange, characterRange).length > 0
-                || line.contentRange.location == characterRange.location
-        }
     }
 
     private func visualRects(
@@ -2111,7 +2139,7 @@ private final class ReviewDiffTextView: NSTextView {
         }
 
         layoutManager.ensureLayout(for: textContainer)
-        for line in visibleLines(layoutManager: layoutManager, textContainer: textContainer) {
+        for line in document.lines {
             let color = line.backgroundColor(for: effectiveAppearance)
             guard color.alphaComponent > 0 else { continue }
 
@@ -2317,24 +2345,6 @@ private final class ReviewDiffTextView: NSTextView {
         }
 
         return NSRange(location: start, length: end - start)
-    }
-
-    private func visibleLines(
-        layoutManager: NSLayoutManager,
-        textContainer: NSTextContainer
-    ) -> [ReviewDiffRenderedLine] {
-        let visibleContainerRect = NSRect(
-            x: visibleRect.minX - textContainerOrigin.x,
-            y: visibleRect.minY - textContainerOrigin.y,
-            width: visibleRect.width,
-            height: visibleRect.height
-        )
-        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleContainerRect, in: textContainer)
-        let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-        return document.lines.filter { line in
-            NSIntersectionRange(line.contentRange, characterRange).length > 0
-                || line.contentRange.location == characterRange.location
-        }
     }
 
     private func visualRects(

@@ -241,4 +241,60 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
 
         XCTAssertEqual(height, 30)
     }
+
+    func testSyntaxHighlightsOnlyMatchCurrentRequestID() {
+        let key = ReviewDiffLineKey(hunkIndex: 0, lineIndex: 0, side: .new)
+        let highlights = ReviewDiffSyntaxHighlights(
+            requestID: 10,
+            linesByKey: [
+                key: ReviewDiffSyntaxLine(segments: [
+                    ReviewDiffSyntaxSegment(text: "let", role: .keyword)
+                ])
+            ],
+            themeName: "tree-sitter-light"
+        )
+
+        XCTAssertNil(highlights.matching(requestID: 11).line(for: key))
+        XCTAssertNotNil(highlights.matching(requestID: 10).line(for: key))
+    }
+
+    func testAttributedStringClampsStaleSyntaxHighlightSegments() {
+        let file = GitReviewFileDiff(diff: SourceFileDiff(
+            oldRelativePath: nil,
+            newRelativePath: "App.swift",
+            hunks: [
+                SourceDiffHunk(
+                    oldStart: 0,
+                    oldLineCount: 0,
+                    newStart: 1,
+                    newLineCount: 1,
+                    lines: [
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 1, content: "let x = 1")
+                    ]
+                )
+            ]
+        ))
+        let document = ReviewDiffRenderedDocument.unified(
+            file: file,
+            oldFileURL: nil,
+            newFileURL: URL(filePath: "/tmp/repo/App.swift")
+        )
+        let key = ReviewDiffLineKey(hunkIndex: 0, lineIndex: 0, side: .new)
+        let highlights = ReviewDiffSyntaxHighlights(
+            requestID: 1,
+            linesByKey: [
+                key: ReviewDiffSyntaxLine(segments: [
+                    ReviewDiffSyntaxSegment(text: String(repeating: "x", count: 100), role: .keyword)
+                ])
+            ],
+            themeName: "tree-sitter-light"
+        )
+
+        let attributedString = ReviewDiffAttributedStringBuilder.attributedString(
+            for: document,
+            syntaxHighlights: highlights
+        )
+
+        XCTAssertEqual(attributedString.string, document.text)
+    }
 }

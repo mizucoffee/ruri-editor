@@ -140,6 +140,27 @@ final class TerminalStateCodingAgentNotificationTests: XCTestCase {
         XCTAssertEqual(notifier.notifiedStatuses.map(\.event), ["PermissionRequest", "StopFailure"])
     }
 
+    func testCanRevealTerminalForNotification() async throws {
+        let store = FakeCodingAgentStatusStore()
+        let notifier = RecordingCodingAgentStatusNotifier()
+        let state = makeTerminalState(store: store, notifier: notifier)
+        let rootURL = URL(filePath: "/tmp/Project")
+
+        state.updateActiveWorkspace(
+            id: rootURL,
+            rootURL: rootURL,
+            agentStatusDirectoryURL: nil
+        )
+        let terminalID = try XCTUnwrap(state.tabs.first?.id)
+
+        XCTAssertEqual(state.workspaceID(containing: terminalID), rootURL.standardizedFileURL)
+
+        state.revealTab(terminalID, in: rootURL.standardizedFileURL)
+
+        XCTAssertEqual(state.activeWorkspaceURL, rootURL.standardizedFileURL)
+        XCTAssertEqual(state.selectedTabID, terminalID)
+    }
+
     private func makeTerminalState(
         store: FakeCodingAgentStatusStore,
         notifier: RecordingCodingAgentStatusNotifier

@@ -106,13 +106,117 @@ final class EditorStateSaveTests: XCTestCase {
         let editor = EditorState(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
+        let tabID = try XCTUnwrap(editor.selectedTabID)
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
+
+        XCTAssertEqual(editor.selectedText, "original")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+
+        editor.focusEditor(tabID: tabID)
 
         XCTAssertEqual(editor.selectedText, "external content")
         XCTAssertEqual(editor.tabs.first?.externalStatus, .externallyModified)
         XCTAssertFalse(editor.canSave)
+    }
+
+    func testExternalFileOnlyUpdateKeepsFileTreeLoaded() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let fileURL = rootURL.appending(path: "Note.txt")
+        let otherURL = rootURL.appending(path: "Other.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+        try "other".write(to: otherURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorState(isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        await editor.openFile(fileURL)
+        let tabID = try XCTUnwrap(editor.selectedTabID)
+
+        XCTAssertEqual(editor.fileTree.map(\.name), ["Note.txt", "Other.txt"])
+
+        try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
+
+        XCTAssertEqual(editor.fileTree.map(\.name), ["Note.txt", "Other.txt"])
+
+        editor.focusEditor(tabID: tabID)
+
+        XCTAssertEqual(editor.selectedText, "external content")
+        XCTAssertEqual(editor.fileTree.map(\.name), ["Note.txt", "Other.txt"])
+    }
+
+    func testExternalDirectoryUpdateKeepsRootTreeLoaded() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let sourcesURL = rootURL.appending(path: "Sources", directoryHint: .isDirectory)
+        let docsURL = rootURL.appending(path: "Docs", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: sourcesURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try "app".write(to: sourcesURL.appending(path: "App.swift"), atomically: true, encoding: .utf8)
+        try "readme".write(to: docsURL.appending(path: "Readme.md"), atomically: true, encoding: .utf8)
+
+        let editor = EditorState(isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+
+        XCTAssertEqual(editor.fileTree.map(\.name), ["Docs", "Sources"])
+
+        try "feature".write(to: sourcesURL.appending(path: "Feature.swift"), atomically: true, encoding: .utf8)
+        await editor.handleExternalProjectChange(ProjectFileWatcher.Change.directoryChange(
+            rootURL: rootURL,
+            paths: [sourcesURL.path(percentEncoded: false)]
+        ))
+
+        XCTAssertEqual(editor.fileTree.map(\.name), ["Docs", "Sources"])
+    }
+
+    func testExternalUpdatesMaterializeSelectedDocumentOnlyOnFocus() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let firstURL = rootURL.appending(path: "First.txt")
+        let secondURL = rootURL.appending(path: "Second.txt")
+        try "first original".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "second original".write(to: secondURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorState(isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        await editor.openFile(firstURL)
+        let firstTabID = try XCTUnwrap(editor.selectedTabID)
+        await editor.openFilePreservingSelectedTab(secondURL)
+        let secondTabID = try XCTUnwrap(editor.selectedTabID)
+
+        try "first external".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "second external".write(to: secondURL, atomically: true, encoding: .utf8)
+        await editor.handleExternalProjectChange(ProjectFileWatcher.Change.fileChange(
+            rootURL: rootURL,
+            paths: [
+                firstURL.standardizedFileURL.path(percentEncoded: false),
+                secondURL.standardizedFileURL.path(percentEncoded: false)
+            ]
+        ))
+
+        XCTAssertEqual(editor.tab(for: firstTabID)?.text, "first original")
+        XCTAssertEqual(editor.tab(for: secondTabID)?.text, "second original")
+
+        editor.focusEditor(tabID: secondTabID)
+
+        XCTAssertEqual(editor.tab(for: firstTabID)?.text, "first original")
+        XCTAssertEqual(editor.tab(for: secondTabID)?.text, "second external")
+
+        editor.selectTab(firstTabID)
+        editor.focusEditor(tabID: firstTabID)
+
+        XCTAssertEqual(editor.tab(for: firstTabID)?.text, "first external")
     }
 
     func testExternalUpdateDoesNotOverwriteDirtyOpenFile() async throws {
@@ -125,10 +229,20 @@ final class EditorStateSaveTests: XCTestCase {
         let editor = EditorState(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
+        let tabID = try XCTUnwrap(editor.selectedTabID)
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
+
+        XCTAssertEqual(editor.selectedText, "local edit")
+        XCTAssertEqual(editor.tabs.first?.lastSavedText, "original")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+
+        editor.focusEditor(tabID: tabID)
 
         XCTAssertEqual(editor.selectedText, "local edit")
         XCTAssertEqual(editor.tabs.first?.lastSavedText, "external content")
@@ -149,7 +263,10 @@ final class EditorStateSaveTests: XCTestCase {
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
 
         await editor.saveSelectedFile()
 
@@ -172,7 +289,10 @@ final class EditorStateSaveTests: XCTestCase {
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
         await editor.saveSelectedFile()
 
         editor.cancelSaveConflict()
@@ -196,7 +316,10 @@ final class EditorStateSaveTests: XCTestCase {
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
         await editor.saveSelectedFile()
 
         await editor.confirmSaveConflictOverwrite()
@@ -232,6 +355,11 @@ final class EditorStateSaveTests: XCTestCase {
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
+
+        XCTAssertEqual(editor.selectedText, "original")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+
+        editor.focusEditor(tabID: try XCTUnwrap(editor.selectedTabID))
 
         XCTAssertEqual(editor.selectedText, "external")
         XCTAssertEqual(editor.tabs.first?.externalStatus, .externallyModified)
@@ -278,7 +406,16 @@ final class EditorStateSaveTests: XCTestCase {
         await editor.openFile(fileURL)
 
         try fileManager.removeItem(at: fileURL)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalProjectChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
+
+        XCTAssertEqual(editor.selectedText, "original")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+        XCTAssertFalse(editor.canSave)
+
+        editor.focusEditor(tabID: try XCTUnwrap(editor.selectedTabID))
 
         XCTAssertEqual(editor.selectedText, "original")
         XCTAssertEqual(editor.tabs.first?.externalStatus, .deleted)

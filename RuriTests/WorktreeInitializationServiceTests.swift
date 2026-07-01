@@ -53,6 +53,23 @@ final class WorktreeInitializationServiceTests: XCTestCase {
         XCTAssertEqual(contents, [])
     }
 
+    func testRunReportsProcessFailureWhenShellCannotLaunch() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let service = WorktreeInitializationService(
+            shellPath: "/tmp/ruri-missing-shell",
+            timeout: 5
+        )
+
+        do {
+            try await service.run(command: "echo setup", in: rootURL)
+            XCTFail("Expected process failure.")
+        } catch WorktreeInitializationError.processFailed(let message) {
+            XCTAssertTrue(message.contains("not executable"))
+        }
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)

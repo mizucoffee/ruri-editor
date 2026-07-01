@@ -1,0 +1,35 @@
+plugins {
+    id "java"
+    id "application"
+    id "com.gradleup.shadow" version "8.3.6"
+}
+
+group = "net.mizucoffee.ruri"
+version = "1.0.0"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+dependencies {
+    implementation "com.github.javaparser:javaparser-symbol-solver-core:3.27.0"
+    implementation "com.google.code.gson:gson:2.11.0"
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+application {
+    mainClass = "net.mizucoffee.ruri.symbol.Main"
+}
+
+tasks.named("test") {
+    useJUnitPlatform()
+}
+
+tasks.named("shadowJar") {
+    archiveBaseName = "java-symbol-resolver"
+    archiveClassifier = ""
+    archiveVersion = ""
+}

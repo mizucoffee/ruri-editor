@@ -44,6 +44,29 @@ final class EditorRuntimeStoreTests: XCTestCase {
         XCTAssertTrue(try textView(from: firstRuntime).undoManager === textView(from: reusedRuntime).undoManager)
     }
 
+    func testExternalTextSyncCanOptIntoFirstResponderUpdate() throws {
+        let store = EditorRuntimeStore()
+        let workspaceID = URL(filePath: "/tmp/ruri")
+        let tab = makeTab(url: URL(filePath: "/tmp/ruri/First.swift"), text: "original")
+        let runtime = store.runtime(
+            workspaceID: workspaceID,
+            tab: tab,
+            session: EditorDocumentSession()
+        )
+        let textView = try textView(from: runtime)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [], backing: .buffered, defer: false)
+        window.contentView = runtime.scrollView
+        window.makeFirstResponder(textView)
+
+        XCTAssertTrue(window.firstResponder === textView)
+
+        runtime.syncExternalTextIfNeeded("external")
+        XCTAssertEqual(textView.string, "original")
+
+        runtime.syncExternalTextIfNeeded("external", allowsFirstResponderUpdate: true)
+        XCTAssertEqual(textView.string, "external")
+    }
+
     func testDocumentRuntimeUndoUsesItsOwnUndoManagerAfterTabStyleSwitching() throws {
         let store = EditorRuntimeStore()
         let workspaceID = URL(filePath: "/tmp/ruri")

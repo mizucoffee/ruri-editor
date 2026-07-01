@@ -109,6 +109,8 @@ protocol EditorDocumentRuntimeDelegate: AnyObject {
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didChangeSelection selectedRange: NSRange)
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didChangeScrollOrigin scrollOrigin: CGPoint)
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didChangeFindState findState: EditorFindState)
+    func editorDocumentRuntimeDidFocusTextView(_ runtime: EditorDocumentRuntime)
+    func editorDocumentRuntimeDidBlurTextView(_ runtime: EditorDocumentRuntime)
     func editorDocumentRuntimeDidRequestFindFocus(_ runtime: EditorDocumentRuntime)
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didRequestImplementationJumpAt utf16Offset: Int)
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, implementationHoverRangeAt utf16Offset: Int) async -> NSRange?

@@ -7,60 +7,13 @@ import AppKit
 import SwiftUI
 
 struct EditorPaneHostView: NSViewControllerRepresentable {
-    let workspaceID: ProjectWorkspaceSnapshot.ID?
-    let editorMode: EditorMode
-    let reviewDiffState: ReviewDiffState
-    let reviewDiffBase: GitReviewDiffBase?
-    let reviewDiffRemoteBranches: [GitRemoteBranchInfo]
-    let isLoadingReviewDiffRemoteBranches: Bool
-    let reviewDiffRemoteBranchErrorMessage: String?
-    let reviewDiffHideWhitespace: Bool
+    let state: EditorPaneHostState
+    let actions: EditorPaneHostActions
     @Binding var reviewDiffDisplayMode: ReviewDiffDisplayMode
     @Binding var reviewDiffWrapLines: Bool
     let runtimeStore: EditorRuntimeStore
-    let tabs: [EditorTabSnapshot]
-    let selectedTabID: EditorTab.ID?
-    let findPresentationRequest: EditorFindPresentationRequest?
-    let implementationJumpRequest: EditorImplementationJumpRequest?
-    let symbolIndexStatus: SymbolIndexStatusState
-    let fileSearchIndexStatus: ProjectFileSearchIndexStatusState
-    let gitRepositoryStatus: GitRepositoryStatus
-    let gitSnapshot: GitRepositorySnapshot?
-    let githubAuthStatus: GitHubAuthStatusState
-    let githubPullRequestStatus: GitHubPullRequestStatus?
-    let tabInputSetting: EditorTabInputSetting
-    let lineWrappingMode: EditorLineWrappingMode
-    let editorSession: (EditorTab.ID) -> EditorDocumentSession?
-    let updateText: (String, EditorTab.ID) -> Void
-    let updateSelection: (NSRange, EditorTab.ID) -> Void
-    let updateScrollOrigin: (CGPoint, EditorTab.ID) -> Void
-    let requestImplementationJump: (EditorTab.ID, Int) -> Void
-    let implementationHoverRange: (EditorTab.ID, Int) async -> NSRange?
-    let requestReviewDiffCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
-    let reviewDiffCodeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
-    let selectTab: (EditorTab.ID) -> Void
-    let setTabInputSetting: (EditorTabInputSetting) -> Void
-    let switchGitBranch: (String) -> Void
-    let refreshGitHubAuthStatus: () -> Void
-    let logInToGitHub: () -> Void
-    let openGitHubPullRequest: (URL) -> Void
-    let selectReviewDiffBase: (GitReviewDiffBase) -> Void
-    let loadReviewDiffRemoteBranches: (Bool) -> Void
-    let refreshReviewDiff: () -> Void
-    let setReviewDiffHideWhitespace: (Bool) -> Void
-    let openReviewDiffFile: (URL) -> Void
-    let closeTab: (EditorTab.ID) -> Void
-    let moveTab: (EditorTab.ID, EditorTab.ID) -> Void
-    let terminalWorkspaceURL: URL?
-    let terminalTabs: [TerminalTabSnapshot]
-    let selectedTerminalTabID: TerminalTab.ID?
-    let terminalFocusRequest: TerminalFocusRequest?
-    let isTerminalMinimized: Bool
-    let terminalView: (TerminalTab.ID) -> NSView?
-    let createTerminalTab: () -> Void
-    let selectTerminalTab: (TerminalTab.ID) -> Void
-    let closeTerminalTab: (TerminalTab.ID) -> Void
-    let toggleTerminalMinimized: () -> Void
+    let terminalState: TerminalPaneHostState
+    let terminalActions: TerminalPaneHostActions
 
     func makeNSViewController(context: Context) -> EditorPaneViewController {
         EditorPaneViewController(runtimeStore: runtimeStore)
@@ -68,59 +21,12 @@ struct EditorPaneHostView: NSViewControllerRepresentable {
 
     func updateNSViewController(_ viewController: EditorPaneViewController, context: Context) {
         viewController.update(
-            workspaceID: workspaceID,
-            editorMode: editorMode,
-            reviewDiffState: reviewDiffState,
-            reviewDiffBase: reviewDiffBase,
-            reviewDiffRemoteBranches: reviewDiffRemoteBranches,
-            isLoadingReviewDiffRemoteBranches: isLoadingReviewDiffRemoteBranches,
-            reviewDiffRemoteBranchErrorMessage: reviewDiffRemoteBranchErrorMessage,
-            reviewDiffHideWhitespace: reviewDiffHideWhitespace,
+            state: state,
+            actions: actions,
             reviewDiffDisplayMode: $reviewDiffDisplayMode,
             reviewDiffWrapLines: $reviewDiffWrapLines,
-            tabs: tabs,
-            selectedTabID: selectedTabID,
-            findPresentationRequest: findPresentationRequest,
-            implementationJumpRequest: implementationJumpRequest,
-            symbolIndexStatus: symbolIndexStatus,
-            fileSearchIndexStatus: fileSearchIndexStatus,
-            gitRepositoryStatus: gitRepositoryStatus,
-            gitSnapshot: gitSnapshot,
-            githubAuthStatus: githubAuthStatus,
-            githubPullRequestStatus: githubPullRequestStatus,
-            tabInputSetting: tabInputSetting,
-            lineWrappingMode: lineWrappingMode,
-            editorSession: editorSession,
-            updateText: updateText,
-            updateSelection: updateSelection,
-            updateScrollOrigin: updateScrollOrigin,
-            requestImplementationJump: requestImplementationJump,
-            implementationHoverRange: implementationHoverRange,
-            requestReviewDiffCodeNavigation: requestReviewDiffCodeNavigation,
-            reviewDiffCodeNavigationHoverRange: reviewDiffCodeNavigationHoverRange,
-            selectTab: selectTab,
-            setTabInputSetting: setTabInputSetting,
-            switchGitBranch: switchGitBranch,
-            refreshGitHubAuthStatus: refreshGitHubAuthStatus,
-            logInToGitHub: logInToGitHub,
-            openGitHubPullRequest: openGitHubPullRequest,
-            selectReviewDiffBase: selectReviewDiffBase,
-            loadReviewDiffRemoteBranches: loadReviewDiffRemoteBranches,
-            refreshReviewDiff: refreshReviewDiff,
-            setReviewDiffHideWhitespace: setReviewDiffHideWhitespace,
-            openReviewDiffFile: openReviewDiffFile,
-            closeTab: closeTab,
-            moveTab: moveTab,
-            terminalWorkspaceURL: terminalWorkspaceURL,
-            terminalTabs: terminalTabs,
-            selectedTerminalTabID: selectedTerminalTabID,
-            terminalFocusRequest: terminalFocusRequest,
-            isTerminalMinimized: isTerminalMinimized,
-            terminalView: terminalView,
-            createTerminalTab: createTerminalTab,
-            selectTerminalTab: selectTerminalTab,
-            closeTerminalTab: closeTerminalTab,
-            toggleTerminalMinimized: toggleTerminalMinimized
+            terminalState: terminalState,
+            terminalActions: terminalActions
         )
     }
 
@@ -188,6 +94,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     private var updateText: ((String, EditorTab.ID) -> Void)?
     private var updateSelection: ((NSRange, EditorTab.ID) -> Void)?
     private var updateScrollOrigin: ((CGPoint, EditorTab.ID) -> Void)?
+    private var focusEditor: ((EditorTab.ID) -> Void)?
+    private var blurEditor: ((EditorTab.ID) -> Void)?
     private var requestImplementationJump: ((EditorTab.ID, Int) -> Void)?
     private var implementationHoverRange: ((EditorTab.ID, Int) async -> NSRange?)?
     private var selectTab: ((EditorTab.ID) -> Void)?
@@ -311,125 +219,80 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     }
 
     func update(
-        workspaceID: ProjectWorkspaceSnapshot.ID?,
-        editorMode: EditorMode,
-        reviewDiffState: ReviewDiffState,
-        reviewDiffBase: GitReviewDiffBase?,
-        reviewDiffRemoteBranches: [GitRemoteBranchInfo],
-        isLoadingReviewDiffRemoteBranches: Bool,
-        reviewDiffRemoteBranchErrorMessage: String?,
-        reviewDiffHideWhitespace: Bool,
+        state: EditorPaneHostState,
+        actions: EditorPaneHostActions,
         reviewDiffDisplayMode: Binding<ReviewDiffDisplayMode>,
         reviewDiffWrapLines: Binding<Bool>,
-        tabs: [EditorTabSnapshot],
-        selectedTabID: EditorTab.ID?,
-        findPresentationRequest: EditorFindPresentationRequest?,
-        implementationJumpRequest: EditorImplementationJumpRequest?,
-        symbolIndexStatus: SymbolIndexStatusState,
-        fileSearchIndexStatus: ProjectFileSearchIndexStatusState,
-        gitRepositoryStatus: GitRepositoryStatus,
-        gitSnapshot: GitRepositorySnapshot?,
-        githubAuthStatus: GitHubAuthStatusState,
-        githubPullRequestStatus: GitHubPullRequestStatus?,
-        tabInputSetting: EditorTabInputSetting,
-        lineWrappingMode: EditorLineWrappingMode,
-        editorSession: @escaping (EditorTab.ID) -> EditorDocumentSession?,
-        updateText: @escaping (String, EditorTab.ID) -> Void,
-        updateSelection: @escaping (NSRange, EditorTab.ID) -> Void,
-        updateScrollOrigin: @escaping (CGPoint, EditorTab.ID) -> Void,
-        requestImplementationJump: @escaping (EditorTab.ID, Int) -> Void,
-        implementationHoverRange: @escaping (EditorTab.ID, Int) async -> NSRange?,
-        requestReviewDiffCodeNavigation: @escaping (ReviewDiffCodeNavigationRequest) -> Void,
-        reviewDiffCodeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?,
-        selectTab: @escaping (EditorTab.ID) -> Void,
-        setTabInputSetting: @escaping (EditorTabInputSetting) -> Void,
-        switchGitBranch: @escaping (String) -> Void,
-        refreshGitHubAuthStatus: @escaping () -> Void,
-        logInToGitHub: @escaping () -> Void,
-        openGitHubPullRequest: @escaping (URL) -> Void,
-        selectReviewDiffBase: @escaping (GitReviewDiffBase) -> Void,
-        loadReviewDiffRemoteBranches: @escaping (Bool) -> Void,
-        refreshReviewDiff: @escaping () -> Void,
-        setReviewDiffHideWhitespace: @escaping (Bool) -> Void,
-        openReviewDiffFile: @escaping (URL) -> Void,
-        closeTab: @escaping (EditorTab.ID) -> Void,
-        moveTab: @escaping (EditorTab.ID, EditorTab.ID) -> Void,
-        terminalWorkspaceURL: URL?,
-        terminalTabs: [TerminalTabSnapshot],
-        selectedTerminalTabID: TerminalTab.ID?,
-        terminalFocusRequest: TerminalFocusRequest?,
-        isTerminalMinimized: Bool,
-        terminalView: @escaping (TerminalTab.ID) -> NSView?,
-        createTerminalTab: @escaping () -> Void,
-        selectTerminalTab: @escaping (TerminalTab.ID) -> Void,
-        closeTerminalTab: @escaping (TerminalTab.ID) -> Void,
-        toggleTerminalMinimized: @escaping () -> Void
+        terminalState: TerminalPaneHostState,
+        terminalActions: TerminalPaneHostActions
     ) {
-        let didChangeTerminalMinimized = self.isTerminalMinimized != isTerminalMinimized
-        let didChangeSelectedTab = self.selectedTabID != selectedTabID
+        let didChangeTerminalMinimized = self.isTerminalMinimized != terminalState.isMinimized
+        let didChangeSelectedTab = self.selectedTabID != state.selectedTabID
 
-        self.workspaceID = workspaceID
-        self.editorMode = editorMode
-        self.reviewDiffState = reviewDiffState
-        self.reviewDiffBase = reviewDiffBase
-        self.reviewDiffRemoteBranches = reviewDiffRemoteBranches
-        self.isLoadingReviewDiffRemoteBranches = isLoadingReviewDiffRemoteBranches
-        self.reviewDiffRemoteBranchErrorMessage = reviewDiffRemoteBranchErrorMessage
-        self.reviewDiffHideWhitespace = reviewDiffHideWhitespace
+        self.workspaceID = state.workspaceID
+        self.editorMode = state.editorMode
+        self.reviewDiffState = state.reviewDiffState
+        self.reviewDiffBase = state.reviewDiffBase
+        self.reviewDiffRemoteBranches = state.reviewDiffRemoteBranches
+        self.isLoadingReviewDiffRemoteBranches = state.isLoadingReviewDiffRemoteBranches
+        self.reviewDiffRemoteBranchErrorMessage = state.reviewDiffRemoteBranchErrorMessage
+        self.reviewDiffHideWhitespace = state.reviewDiffHideWhitespace
         self.reviewDiffDisplayMode = reviewDiffDisplayMode
         self.reviewDiffWrapLines = reviewDiffWrapLines
-        self.tabs = tabs
-        self.selectedTabID = selectedTabID
-        self.symbolIndexStatus = symbolIndexStatus
-        self.fileSearchIndexStatus = fileSearchIndexStatus
-        self.gitRepositoryStatus = gitRepositoryStatus
-        self.gitSnapshot = gitSnapshot
-        self.githubAuthStatus = githubAuthStatus
-        self.githubPullRequestStatus = githubPullRequestStatus
-        self.tabInputSetting = tabInputSetting
-        self.lineWrappingMode = lineWrappingMode
-        self.isTerminalMinimized = isTerminalMinimized
+        self.tabs = state.tabs
+        self.selectedTabID = state.selectedTabID
+        self.symbolIndexStatus = state.symbolIndexStatus
+        self.fileSearchIndexStatus = state.fileSearchIndexStatus
+        self.gitRepositoryStatus = state.gitRepositoryStatus
+        self.gitSnapshot = state.gitSnapshot
+        self.githubAuthStatus = state.githubAuthStatus
+        self.githubPullRequestStatus = state.githubPullRequestStatus
+        self.tabInputSetting = state.tabInputSetting
+        self.lineWrappingMode = state.lineWrappingMode
+        self.isTerminalMinimized = terminalState.isMinimized
         self.terminalStatus = TerminalStatusBarState(
-            tabCount: terminalTabs.count,
-            isMinimized: isTerminalMinimized,
-            isEnabled: terminalWorkspaceURL != nil
+            tabCount: terminalState.tabs.count,
+            isMinimized: terminalState.isMinimized,
+            isEnabled: terminalState.workspaceURL != nil
         )
-        self.editorSession = editorSession
-        self.updateText = updateText
-        self.updateSelection = updateSelection
-        self.updateScrollOrigin = updateScrollOrigin
-        self.requestImplementationJump = requestImplementationJump
-        self.implementationHoverRange = implementationHoverRange
-        self.selectTab = selectTab
-        self.setTabInputSetting = setTabInputSetting
-        self.switchGitBranch = switchGitBranch
-        self.refreshGitHubAuthStatus = refreshGitHubAuthStatus
-        self.logInToGitHub = logInToGitHub
-        self.openGitHubPullRequest = openGitHubPullRequest
-        self.selectReviewDiffBase = selectReviewDiffBase
-        self.loadReviewDiffRemoteBranches = loadReviewDiffRemoteBranches
-        self.refreshReviewDiff = refreshReviewDiff
-        self.setReviewDiffHideWhitespace = setReviewDiffHideWhitespace
-        self.openReviewDiffFile = openReviewDiffFile
-        self.closeTab = closeTab
-        self.moveTab = moveTab
-        self.toggleTerminalMinimized = toggleTerminalMinimized
+        self.editorSession = actions.editorSession
+        self.updateText = actions.updateText
+        self.updateSelection = actions.updateSelection
+        self.updateScrollOrigin = actions.updateScrollOrigin
+        self.focusEditor = actions.focusEditor
+        self.blurEditor = actions.blurEditor
+        self.requestImplementationJump = actions.requestImplementationJump
+        self.implementationHoverRange = actions.implementationHoverRange
+        self.selectTab = actions.selectTab
+        self.setTabInputSetting = actions.setTabInputSetting
+        self.switchGitBranch = actions.switchGitBranch
+        self.refreshGitHubAuthStatus = actions.refreshGitHubAuthStatus
+        self.logInToGitHub = actions.logInToGitHub
+        self.openGitHubPullRequest = actions.openGitHubPullRequest
+        self.selectReviewDiffBase = actions.selectReviewDiffBase
+        self.loadReviewDiffRemoteBranches = actions.loadReviewDiffRemoteBranches
+        self.refreshReviewDiff = actions.refreshReviewDiff
+        self.setReviewDiffHideWhitespace = actions.setReviewDiffHideWhitespace
+        self.openReviewDiffFile = actions.openReviewDiffFile
+        self.closeTab = actions.closeTab
+        self.moveTab = actions.moveTab
+        self.toggleTerminalMinimized = terminalActions.toggleMinimized
 
-        setTerminalPanelVisible(!isTerminalMinimized)
+        setTerminalPanelVisible(!terminalState.isMinimized)
         updateTabBar()
         updateTerminalPanel(
-            workspaceURL: terminalWorkspaceURL,
-            tabs: terminalTabs,
-            selectedTabID: selectedTerminalTabID,
-            terminalFocusRequest: terminalFocusRequest,
-            terminalView: terminalView,
-            createTab: createTerminalTab,
-            selectTab: selectTerminalTab,
-            closeTab: closeTerminalTab
+            workspaceURL: terminalState.workspaceURL,
+            tabs: terminalState.tabs,
+            selectedTabID: terminalState.selectedTabID,
+            terminalFocusRequest: terminalState.focusRequest,
+            terminalView: terminalActions.terminalView,
+            createTab: terminalActions.createTab,
+            selectTab: terminalActions.selectTab,
+            closeTab: terminalActions.closeTab
         )
 
         if didChangeTerminalMinimized {
-            shouldApplyTerminalSplit = !isTerminalMinimized
+            shouldApplyTerminalSplit = !terminalState.isMinimized
         }
 
         if editorMode == .review {
@@ -437,32 +300,32 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             updateFindBar(for: nil)
             setEditorChromeVisibility(hasOpenTab: false)
             showReviewDiff(
-                state: reviewDiffState,
-                selectedBase: reviewDiffBase,
-                localBranches: gitSnapshot?.localBranches ?? [],
-                remoteBranches: reviewDiffRemoteBranches,
-                isLoadingRemoteBranches: isLoadingReviewDiffRemoteBranches,
-                remoteBranchErrorMessage: reviewDiffRemoteBranchErrorMessage,
-                hideWhitespace: reviewDiffHideWhitespace,
+                state: state.reviewDiffState,
+                selectedBase: state.reviewDiffBase,
+                localBranches: state.gitSnapshot?.localBranches ?? [],
+                remoteBranches: state.reviewDiffRemoteBranches,
+                isLoadingRemoteBranches: state.isLoadingReviewDiffRemoteBranches,
+                remoteBranchErrorMessage: state.reviewDiffRemoteBranchErrorMessage,
+                hideWhitespace: state.reviewDiffHideWhitespace,
                 displayMode: reviewDiffDisplayMode,
                 wrapLines: reviewDiffWrapLines,
-                selectBase: selectReviewDiffBase,
-                loadRemoteBranches: loadReviewDiffRemoteBranches,
-                refresh: refreshReviewDiff,
-                setHideWhitespace: setReviewDiffHideWhitespace,
-                openFile: openReviewDiffFile,
-                requestCodeNavigation: requestReviewDiffCodeNavigation,
-                codeNavigationHoverRange: reviewDiffCodeNavigationHoverRange
+                selectBase: actions.selectReviewDiffBase,
+                loadRemoteBranches: actions.loadReviewDiffRemoteBranches,
+                refresh: actions.refreshReviewDiff,
+                setHideWhitespace: actions.setReviewDiffHideWhitespace,
+                openFile: actions.openReviewDiffFile,
+                requestCodeNavigation: actions.requestReviewDiffCodeNavigation,
+                codeNavigationHoverRange: actions.reviewDiffCodeNavigationHoverRange
             )
             return
         }
 
         discardReviewDiffHostingView()
 
-        guard let workspaceID,
-              let selectedTabID,
-              let selectedTab = tabs.first(where: { $0.id == selectedTabID }),
-              let session = editorSession(selectedTabID) else {
+        guard let workspaceID = state.workspaceID,
+              let selectedTabID = state.selectedTabID,
+              let selectedTab = state.tabs.first(where: { $0.id == selectedTabID }),
+              let session = actions.editorSession(selectedTabID) else {
             updateStatusBar(for: nil)
             updateFindBar(for: nil)
             setEditorChromeVisibility(hasOpenTab: false)
@@ -478,10 +341,13 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             session: session
         )
         runtime.delegate = self
-        runtime.syncExternalTextIfNeeded(selectedTab.text)
-        runtime.updateDiffDecorations(gitSnapshot?.diff(for: selectedTab.url)?.editorDecorations ?? [])
-        runtime.updateTabInputSetting(tabInputSetting)
-        runtime.updateLineWrappingMode(lineWrappingMode)
+        runtime.syncExternalTextIfNeeded(
+            selectedTab.text,
+            allowsFirstResponderUpdate: selectedTab.externalStatus == .externallyModified
+        )
+        runtime.updateDiffDecorations(state.gitSnapshot?.diff(for: selectedTab.url)?.editorDecorations ?? [])
+        runtime.updateTabInputSetting(state.tabInputSetting)
+        runtime.updateLineWrappingMode(state.lineWrappingMode)
         showRuntime(
             runtime,
             activationFocusBehavior: runtimeStore.activationFocusBehavior(
@@ -489,10 +355,13 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
                 didChangeSelectedTab: didChangeSelectedTab
             )
         )
+        if runtime.isTextViewFirstResponder {
+            scheduleEditorFocus(selectedTabID, for: runtime)
+        }
         runtime.applyPendingSelectionRevealIfNeeded()
         updateStatusBar(for: runtime)
-        consumeFindPresentationRequestIfNeeded(findPresentationRequest)
-        consumeImplementationJumpRequestIfNeeded(implementationJumpRequest)
+        consumeFindPresentationRequestIfNeeded(state.findPresentationRequest)
+        consumeImplementationJumpRequestIfNeeded(state.implementationJumpRequest)
         updateFindBar(for: runtime)
     }
 
@@ -550,6 +419,33 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didChangeFindState findState: EditorFindState) {
         guard activeRuntime === runtime else { return }
         updateFindBar(for: runtime)
+    }
+
+    func editorDocumentRuntimeDidFocusTextView(_ runtime: EditorDocumentRuntime) {
+        guard activeRuntime === runtime,
+              let tabID = tabID(for: runtime) else {
+            return
+        }
+
+        scheduleEditorFocus(tabID, for: runtime)
+    }
+
+    func editorDocumentRuntimeDidBlurTextView(_ runtime: EditorDocumentRuntime) {
+        guard let tabID = tabID(for: runtime) else { return }
+        blurEditor?(tabID)
+    }
+
+    private func scheduleEditorFocus(_ tabID: EditorTab.ID, for runtime: EditorDocumentRuntime) {
+        DispatchQueue.main.async { [weak self, weak runtime] in
+            guard let self,
+                  let runtime,
+                  self.activeRuntime === runtime,
+                  runtime.isTextViewFirstResponder else {
+                return
+            }
+
+            self.focusEditor?(tabID)
+        }
     }
 
     func editorDocumentRuntimeDidRequestFindFocus(_ runtime: EditorDocumentRuntime) {
@@ -1235,6 +1131,43 @@ private final class EditorBodyContainerAppKitView: NSView {
     }
 }
 
+enum EditorFindBarControlRole {
+    case search
+    case replacement
+}
+
+enum EditorFindBarCommandAction: Equatable {
+    case next
+    case previous
+    case replace
+
+    static func action(
+        for controlRole: EditorFindBarControlRole,
+        commandSelector: Selector,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> EditorFindBarCommandAction? {
+        let commandModifiers = modifierFlags.intersection([.command, .control, .option])
+        guard commandModifiers.isEmpty else { return nil }
+
+        let isStandardReturn = commandSelector == #selector(NSResponder.insertNewline(_:))
+        let isShiftReturn = commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+
+        if controlRole == .search,
+           isStandardReturn || isShiftReturn {
+            return modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
+                ? .previous
+                : .next
+        }
+
+        if controlRole == .replacement,
+           isStandardReturn {
+            return .replace
+        }
+
+        return nil
+    }
+}
+
 private final class EditorFindBarAppKitView: NSView, NSSearchFieldDelegate, NSTextFieldDelegate {
     var onQueryChanged: ((String) -> Void)?
     var onReplacementChanged: ((String) -> Void)?
@@ -1331,18 +1264,35 @@ private final class EditorFindBarAppKitView: NSView, NSSearchFieldDelegate, NSTe
         textView: NSTextView,
         doCommandBy commandSelector: Selector
     ) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
-            if control === searchField {
-                onNext?()
-            } else if control === replacementField {
-                onReplace?()
-            }
-            return true
-
-        default:
+        guard let controlRole = controlRole(for: control),
+              let action = EditorFindBarCommandAction.action(
+                for: controlRole,
+                commandSelector: commandSelector,
+                modifierFlags: NSApp.currentEvent?.modifierFlags ?? []
+              ) else {
             return false
         }
+
+        switch action {
+        case .next:
+            onNext?()
+        case .previous:
+            onPrevious?()
+        case .replace:
+            onReplace?()
+        }
+
+        return true
+    }
+
+    private func controlRole(for control: NSControl) -> EditorFindBarControlRole? {
+        if control === searchField {
+            return .search
+        }
+        if control === replacementField {
+            return .replacement
+        }
+        return nil
     }
 
     private func setup() {
@@ -1621,7 +1571,7 @@ private final class EditorTabBarView: NSView {
 }
 
 private final class EditorTabItemAppKitView: NSView, NSDraggingSource {
-    private static let tabPasteboardType = NSPasteboard.PasteboardType("engineering.ooo.ruri.editor-tab-id")
+    private static let tabPasteboardType = NSPasteboard.PasteboardType("net.mizucoffee.ruri.editor-tab-id")
 
     private let tabID: EditorTab.ID
     private let titleLabel = NSTextField(labelWithString: "")

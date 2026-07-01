@@ -65,3 +65,8 @@ fastlane/test_output
 
 # Downloaded by Scripts/install-ripgrep-resource.sh or release workflows.
 Ruri/Resources/Tools/rg
+
+# Built by Scripts/build-java-symbol-resolver.sh or release workflows.
+Ruri/Resources/Tools/java-symbol-resolver.jar
+Tools/java-symbol-resolver/.gradle/
+Tools/java-symbol-resolver/build/

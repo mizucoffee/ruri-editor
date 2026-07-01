@@ -111,78 +111,86 @@ struct ContentView: View {
                 EditorPaneView(
                     runtimeStore: editorRuntimeStore,
                     terminalState: terminalState,
-                    workspaceID: editor.activeProjectID,
-                    editorMode: editor.editorMode,
-                    reviewDiffState: editor.reviewDiffState,
-                    reviewDiffBase: editor.reviewDiffBase,
-                    reviewDiffRemoteBranches: editor.reviewDiffRemoteBranches,
-                    isLoadingReviewDiffRemoteBranches: editor.isLoadingReviewDiffRemoteBranches,
-                    reviewDiffRemoteBranchErrorMessage: editor.reviewDiffRemoteBranchErrorMessage,
-                    reviewDiffHideWhitespace: editor.reviewDiffHideWhitespace,
-                    tabs: editor.mainTabs,
-                    selectedTabID: editor.selectedTabID,
-                    symbolIndexStatus: editor.symbolIndexStatus,
-                    fileSearchIndexStatus: fileSearch.indexStatus,
-                    gitRepositoryStatus: editor.gitRepositoryStatus,
-                    gitSnapshot: editor.gitSnapshot,
-                    githubAuthStatus: githubAuth.status,
-                    githubPullRequestStatus: editor.githubPullRequestStatus,
-                    tabInputSetting: tabInputSettings.setting,
-                    lineWrappingMode: lineWrappingSettings.mode,
-                    editorSession: { editor.editorSession(for: $0) },
-                    updateText: { editor.updateText($0, in: $1) },
-                    updateSelection: { editor.updateSelection($0, in: $1) },
-                    updateScrollOrigin: { editor.updateScrollOrigin($0, in: $1) },
-                    requestImplementationJump: { tabID, utf16Offset in
-                        resolveImplementationOrReferences(at: utf16Offset, in: tabID)
-                    },
-                    implementationHoverRange: { tabID, utf16Offset in
-                        await editor.implementationHoverRange(at: utf16Offset, in: tabID)
-                    },
-                    requestReviewDiffCodeNavigation: { request in
-                        resolveReviewDiffImplementationOrReferences(request)
-                    },
-                    reviewDiffCodeNavigationHoverRange: { request in
-                        await editor.reviewDiffImplementationHoverRange(request)
-                    },
-                    selectTab: { editor.selectTab($0) },
-                    setTabInputSetting: { tabInputSettings.setting = $0 },
-                    switchGitBranch: { branchName in
-                        switchGitBranch(named: branchName)
-                    },
-                    refreshGitHubAuthStatus: {
-                        refreshGitHubAuthStatus()
-                    },
-                    logInToGitHub: {
-                        logInToGitHub()
-                    },
-                    openGitHubPullRequest: { url in
-                        NSWorkspace.shared.open(url)
-                    },
-                    selectReviewDiffBase: { base in
-                        editor.setReviewDiffBase(base)
-                    },
-                    loadReviewDiffRemoteBranches: { refresh in
-                        editor.loadReviewDiffRemoteBranches(refresh: refresh)
-                    },
-                    refreshReviewDiff: {
-                        editor.refreshReviewDiff()
-                    },
-                    setReviewDiffHideWhitespace: { hideWhitespace in
-                        editor.setReviewDiffHideWhitespace(hideWhitespace)
-                    },
-                    openReviewDiffFile: { url in
-                        openFile(url, activationFocusBehavior: .focusTextView)
-                    },
-                    closeTab: { tabID in
-                        if let closedDocument = editor.closeTab(tabID) {
-                            editorRuntimeStore.closeDocument(
-                                workspaceID: closedDocument.workspaceID,
-                                documentID: closedDocument.documentID
-                            )
-                        }
-                    },
-                    moveTab: { editor.moveTab($0, to: $1) }
+                    state: EditorPaneHostState(
+                        workspaceID: editor.activeProjectID,
+                        editorMode: editor.editorMode,
+                        reviewDiffState: editor.reviewDiffState,
+                        reviewDiffBase: editor.reviewDiffBase,
+                        reviewDiffRemoteBranches: editor.reviewDiffRemoteBranches,
+                        isLoadingReviewDiffRemoteBranches: editor.isLoadingReviewDiffRemoteBranches,
+                        reviewDiffRemoteBranchErrorMessage: editor.reviewDiffRemoteBranchErrorMessage,
+                        reviewDiffHideWhitespace: editor.reviewDiffHideWhitespace,
+                        tabs: editor.mainTabs,
+                        selectedTabID: editor.selectedTabID,
+                        findPresentationRequest: editorRuntimeStore.findPresentationRequest,
+                        implementationJumpRequest: editorRuntimeStore.implementationJumpRequest,
+                        symbolIndexStatus: editor.symbolIndexStatus,
+                        fileSearchIndexStatus: fileSearch.indexStatus,
+                        gitRepositoryStatus: editor.gitRepositoryStatus,
+                        gitSnapshot: editor.gitSnapshot,
+                        githubAuthStatus: githubAuth.status,
+                        githubPullRequestStatus: editor.githubPullRequestStatus,
+                        tabInputSetting: tabInputSettings.setting,
+                        lineWrappingMode: lineWrappingSettings.mode
+                    ),
+                    actions: EditorPaneHostActions(
+                        editorSession: { editor.editorSession(for: $0) },
+                        updateText: { editor.updateText($0, in: $1) },
+                        updateSelection: { editor.updateSelection($0, in: $1) },
+                        updateScrollOrigin: { editor.updateScrollOrigin($0, in: $1) },
+                        focusEditor: { editor.focusEditor(tabID: $0) },
+                        blurEditor: { editor.blurEditor(tabID: $0) },
+                        requestImplementationJump: { tabID, utf16Offset in
+                            resolveImplementationOrReferences(at: utf16Offset, in: tabID)
+                        },
+                        implementationHoverRange: { tabID, utf16Offset in
+                            await editor.implementationHoverRange(at: utf16Offset, in: tabID)
+                        },
+                        requestReviewDiffCodeNavigation: { request in
+                            resolveReviewDiffImplementationOrReferences(request)
+                        },
+                        reviewDiffCodeNavigationHoverRange: { request in
+                            await editor.reviewDiffImplementationHoverRange(request)
+                        },
+                        selectTab: { editor.selectTab($0) },
+                        setTabInputSetting: { tabInputSettings.setting = $0 },
+                        switchGitBranch: { branchName in
+                            switchGitBranch(named: branchName)
+                        },
+                        refreshGitHubAuthStatus: {
+                            refreshGitHubAuthStatus()
+                        },
+                        logInToGitHub: {
+                            logInToGitHub()
+                        },
+                        openGitHubPullRequest: { url in
+                            NSWorkspace.shared.open(url)
+                        },
+                        selectReviewDiffBase: { base in
+                            editor.setReviewDiffBase(base)
+                        },
+                        loadReviewDiffRemoteBranches: { refresh in
+                            editor.loadReviewDiffRemoteBranches(refresh: refresh)
+                        },
+                        refreshReviewDiff: {
+                            editor.refreshReviewDiff()
+                        },
+                        setReviewDiffHideWhitespace: { hideWhitespace in
+                            editor.setReviewDiffHideWhitespace(hideWhitespace)
+                        },
+                        openReviewDiffFile: { url in
+                            openFile(url, activationFocusBehavior: .focusTextView)
+                        },
+                        closeTab: { tabID in
+                            if let closedDocument = editor.closeTab(tabID) {
+                                editorRuntimeStore.closeDocument(
+                                    workspaceID: closedDocument.workspaceID,
+                                    documentID: closedDocument.documentID
+                                )
+                            }
+                        },
+                        moveTab: { editor.moveTab($0, to: $1) }
+                    )
                 )
             }
             .inspector(isPresented: $isWorktreeOverviewVisible) {
@@ -339,6 +347,15 @@ struct ContentView: View {
                     loadRemoteWorktreeBranches(refresh: true)
                 }
             )
+        }
+        .onAppear {
+            terminalState.setOpenFileRequestHandler { [editor, editorRuntimeStore] request in
+                Self.openTerminalFile(
+                    request,
+                    editor: editor,
+                    editorRuntimeStore: editorRuntimeStore
+                )
+            }
         }
         .alert(
             AppText.deleteWorktreeAlertTitle,
@@ -519,7 +536,7 @@ struct ContentView: View {
                     selectedRemoteWorktreeBranchID = nil
                 }
                 pendingInitializationWorkspaceID = workspaceID
-                try await editor.initializeWorktree(workspaceID, command: initializationCommand)
+                try await editor.initializeCreatedWorktree(workspaceID, command: initializationCommand)
                 pendingInitializationWorkspaceID = nil
                 isNewWorktreeSheetPresented = false
             } catch {
@@ -538,7 +555,7 @@ struct ContentView: View {
         Task {
             do {
                 try await worktreeInitialization.saveCommand(initializationCommand)
-                try await editor.initializeWorktree(workspaceID, command: initializationCommand)
+                try await editor.initializeCreatedWorktree(workspaceID, command: initializationCommand)
                 pendingInitializationWorkspaceID = nil
                 isNewWorktreeSheetPresented = false
             } catch {
@@ -695,6 +712,32 @@ struct ContentView: View {
         }
     }
 
+    private static func openTerminalFile(
+        _ request: TerminalFileOpenRequest,
+        editor: EditorState,
+        editorRuntimeStore: EditorRuntimeStore
+    ) {
+        editorRuntimeStore.requestActivationFocusBehavior(.focusTextView, for: request.url)
+
+        Task {
+            let closedDocument: ClosedEditorDocument?
+            if let lineNumber = request.lineNumber {
+                let range = await editor.lineContentRange(lineNumber: lineNumber, in: request.url)
+                    ?? NSRange(location: 0, length: 0)
+                closedDocument = await editor.navigateToFileRange(request.url, range: range)
+            } else {
+                closedDocument = await editor.openFile(request.url)
+            }
+
+            if let closedDocument {
+                editorRuntimeStore.closeDocument(
+                    workspaceID: closedDocument.workspaceID,
+                    documentID: closedDocument.documentID
+                )
+            }
+        }
+    }
+
     private func openTextSearchResult(_ result: ProjectTextSearchResult) {
         editorRuntimeStore.requestActivationFocusBehavior(.focusTextView, for: result.url)
 
@@ -798,280 +841,6 @@ struct ContentView: View {
     }
 }
 
-private struct CodeNavigationToast: Identifiable, Equatable {
-    let id = UUID()
-    let message: String
-    let systemImage: String
-}
-
-private enum NewWorktreeSource: String, CaseIterable, Identifiable {
-    case local
-    case remote
-
-    var id: Self {
-        self
-    }
-}
-
-private struct NewWorktreeSheet: View {
-    @Binding var source: NewWorktreeSource
-    @Binding var branchName: String
-    @Binding var initializationCommand: String
-    @Binding var remoteSearchText: String
-    @Binding var selectedRemoteBranchID: GitRemoteBranchInfo.ID?
-    let isCreating: Bool
-    let isRetryingInitialization: Bool
-    let errorMessage: String?
-    let remoteBranches: [GitRemoteBranchInfo]
-    let isLoadingRemoteBranches: Bool
-    let remoteErrorMessage: String?
-    let create: () -> Void
-    let cancel: () -> Void
-    let loadRemoteBranches: () -> Void
-
-    private var trimmedBranchName: String {
-        branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var trimmedRemoteSearchText: String {
-        remoteSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var filteredRemoteBranches: [GitRemoteBranchInfo] {
-        guard !trimmedRemoteSearchText.isEmpty else {
-            return remoteBranches
-        }
-
-        return remoteBranches.filter { branch in
-            branch.fullName.localizedCaseInsensitiveContains(trimmedRemoteSearchText)
-                || branch.branchName.localizedCaseInsensitiveContains(trimmedRemoteSearchText)
-        }
-    }
-
-    private var selectedRemoteBranch: GitRemoteBranchInfo? {
-        guard let selectedRemoteBranchID else { return nil }
-        return remoteBranches.first { $0.id == selectedRemoteBranchID }
-    }
-
-    private var canCreate: Bool {
-        guard !isCreating else { return false }
-
-        if isRetryingInitialization {
-            return true
-        }
-
-        switch source {
-        case .local:
-            return !trimmedBranchName.isEmpty
-        case .remote:
-            return selectedRemoteBranch != nil
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(AppText.newWorktreeTitle)
-                .font(.headline)
-
-            Picker("Worktree Source", selection: $source) {
-                Text(AppText.newWorktreeLocalSource).tag(NewWorktreeSource.local)
-                Text(AppText.newWorktreeRemoteSource).tag(NewWorktreeSource.remote)
-            }
-            .pickerStyle(.segmented)
-            .disabled(isCreating)
-
-            switch source {
-            case .local:
-                localBranchForm
-            case .remote:
-                remoteBranchForm
-            }
-
-            initializationForm
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-
-                Button(AppText.cancelButton) {
-                    cancel()
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(isCreating)
-
-                Button {
-                    create()
-                } label: {
-                    HStack(spacing: 6) {
-                        if isCreating {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                        Text(isRetryingInitialization ? AppText.retryInitializationButton : AppText.createButton)
-                    }
-                    .frame(minWidth: isRetryingInitialization ? 132 : 74)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canCreate)
-            }
-        }
-        .padding(20)
-        .frame(width: 460)
-        .onAppear {
-            if source == .remote {
-                loadRemoteBranches()
-            }
-        }
-        .onChange(of: source) { _, newSource in
-            if newSource == .remote {
-                loadRemoteBranches()
-            }
-        }
-        .onChange(of: remoteSearchText) { _, _ in
-            clearHiddenRemoteSelection()
-        }
-    }
-
-    private var localBranchForm: some View {
-        TextField(AppText.newWorktreeBranchPlaceholder, text: $branchName)
-            .textFieldStyle(.roundedBorder)
-            .disabled(isCreating)
-            .onSubmit {
-                guard canCreate else { return }
-                create()
-            }
-    }
-
-    private var initializationForm: some View {
-        TextField(AppText.worktreeInitializationCommandPlaceholder, text: $initializationCommand)
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-            .disabled(isCreating)
-            .onSubmit {
-                guard canCreate else { return }
-                create()
-            }
-    }
-
-    private var remoteBranchForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField(AppText.newWorktreeRemoteSearchPlaceholder, text: $remoteSearchText)
-                .textFieldStyle(.roundedBorder)
-                .disabled(isCreating || (isLoadingRemoteBranches && remoteBranches.isEmpty))
-
-            if let remoteErrorMessage,
-               !remoteErrorMessage.isEmpty,
-               remoteBranches.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(remoteErrorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button(AppText.retryButton) {
-                        loadRemoteBranches()
-                    }
-                    .disabled(isCreating || isLoadingRemoteBranches)
-                }
-                .frame(minHeight: 180, alignment: .center)
-            } else if isLoadingRemoteBranches && remoteBranches.isEmpty {
-                ProgressView(AppText.newWorktreeFetchingRemoteBranches)
-                    .frame(maxWidth: .infinity, minHeight: 180)
-            } else if filteredRemoteBranches.isEmpty {
-                ContentUnavailableView(
-                    remoteBranches.isEmpty
-                        ? AppText.newWorktreeNoRemoteBranches
-                        : AppText.newWorktreeNoRemoteBranchMatches,
-                    systemImage: "arrow.triangle.branch"
-                )
-                .frame(minHeight: 180)
-            } else {
-                List(selection: $selectedRemoteBranchID) {
-                    ForEach(filteredRemoteBranches) { branch in
-                        RemoteBranchRow(branch: branch)
-                            .tag(branch.id)
-                    }
-                }
-                .frame(minHeight: 180, idealHeight: 240)
-                .disabled(isCreating)
-
-                if isLoadingRemoteBranches {
-                    ProgressView(AppText.newWorktreeFetchingRemoteBranches)
-                        .controlSize(.small)
-                }
-            }
-        }
-    }
-
-    private func clearHiddenRemoteSelection() {
-        guard let selectedRemoteBranchID,
-              !filteredRemoteBranches.contains(where: { $0.id == selectedRemoteBranchID }) else {
-            return
-        }
-
-        self.selectedRemoteBranchID = nil
-    }
-}
-
-private struct RemoteBranchRow: View {
-    let branch: GitRemoteBranchInfo
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(branch.branchName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Text(branch.remoteName)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
-    }
-}
-
-private struct CodeNavigationToastView: View {
-    let message: String
-    let systemImage: String
-
-    var body: some View {
-        Label {
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-        } icon: {
-            Image(systemName: systemImage)
-                .imageScale(.medium)
-        }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: 420, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(.separator.opacity(0.6), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.14), radius: 12, y: 6)
-    }
-}
-
 #Preview {
     ContentView(
         editor: EditorState(),
@@ -1089,13 +858,4 @@ private struct CodeNavigationToastView: View {
         isWorktreeOverviewVisible: .constant(true),
         openProjectInNewWindow: { _ in }
     )
-}
-
-private struct PreviewGitHubAuthService: GitHubAuthServiceProtocol {
-    func currentAuthenticationStatus() async -> GitHubAuthStatusState {
-        .unauthenticated
-    }
-
-    func logIn(devicePromptHandler: @escaping @Sendable (GitHubLoginDevicePrompt) -> Void) async throws {
-    }
 }

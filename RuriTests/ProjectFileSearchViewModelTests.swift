@@ -17,7 +17,7 @@ final class ProjectFileSearchViewModelTests: XCTestCase {
         try fileManager.createDirectory(at: rootURL.appending(path: "Sources"), withIntermediateDirectories: false)
         try "app".write(to: rootURL.appending(path: "Sources/App.swift"), atomically: true, encoding: .utf8)
 
-        let viewModel = ProjectFileSearchViewModel()
+        let viewModel = ProjectFileSearchViewModel(fileService: try makeFileService())
 
         viewModel.updateActiveProject(rootURL)
         let fileCount = try await waitForIndexReady(in: viewModel)
@@ -47,5 +47,37 @@ final class ProjectFileSearchViewModelTests: XCTestCase {
         let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeFileService() throws -> ProjectFileService {
+        guard let executableURL = ripgrepExecutableURL() else {
+            throw XCTSkip("ripgrep is not available in PATH.")
+        }
+
+        return ProjectFileService(searchExecutableURL: executableURL)
+    }
+
+    private func ripgrepExecutableURL() -> URL? {
+        for directory in searchPathDirectories() {
+            let url = URL(filePath: directory).appending(path: "rg")
+            if fileManager.isExecutableFile(atPath: url.path(percentEncoded: false)) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private func searchPathDirectories() -> [String] {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let defaults = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin"
+        ]
+
+        return path
+            .split(separator: ":")
+            .map(String.init) + defaults
     }
 }

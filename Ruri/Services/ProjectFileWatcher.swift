@@ -10,30 +10,113 @@ import Foundation
 final class ProjectFileWatcher {
     struct Change: Equatable, Sendable {
         let rootURL: URL
-        let changedPaths: Set<String>
+        let dirtyFilePaths: Set<String>
+        let dirtyDirectoryPaths: Set<String>
+        let dirtyRecursivePaths: Set<String>
         let gitMetadataChangedPaths: Set<String>
+        let requiresWorkspaceRescan: Bool
+        let requiresFullGitRefresh: Bool
+
+        init(
+            rootURL: URL,
+            dirtyFilePaths: Set<String>,
+            dirtyDirectoryPaths: Set<String> = [],
+            dirtyRecursivePaths: Set<String> = [],
+            gitMetadataChangedPaths: Set<String> = [],
+            requiresWorkspaceRescan: Bool = false,
+            requiresFullGitRefresh: Bool = false
+        ) {
+            self.rootURL = rootURL
+            self.dirtyFilePaths = dirtyFilePaths
+            self.dirtyDirectoryPaths = dirtyDirectoryPaths
+            self.dirtyRecursivePaths = dirtyRecursivePaths
+            self.gitMetadataChangedPaths = gitMetadataChangedPaths
+            self.requiresWorkspaceRescan = requiresWorkspaceRescan
+            self.requiresFullGitRefresh = requiresFullGitRefresh
+        }
+
+        init(
+            rootURL: URL,
+            changedPaths: Set<String>,
+            gitMetadataChangedPaths: Set<String> = []
+        ) {
+            self.init(
+                rootURL: rootURL,
+                dirtyFilePaths: changedPaths,
+                gitMetadataChangedPaths: gitMetadataChangedPaths
+            )
+        }
+
+        static func fileChange(rootURL: URL, paths: Set<String>) -> Change {
+            Change(rootURL: rootURL.standardizedFileURL, dirtyFilePaths: paths)
+        }
+
+        static func directoryChange(rootURL: URL, paths: Set<String>) -> Change {
+            Change(rootURL: rootURL.standardizedFileURL, dirtyFilePaths: [], dirtyDirectoryPaths: paths)
+        }
+
+        static func recursiveChange(rootURL: URL, paths: Set<String>) -> Change {
+            Change(rootURL: rootURL.standardizedFileURL, dirtyFilePaths: [], dirtyRecursivePaths: paths)
+        }
+
+        static func workspaceRescan(rootURL: URL) -> Change {
+            let standardizedURL = rootURL.standardizedFileURL
+            return Change(
+                rootURL: standardizedURL,
+                dirtyFilePaths: [],
+                dirtyRecursivePaths: [standardizedURL.path(percentEncoded: false)],
+                requiresWorkspaceRescan: true,
+                requiresFullGitRefresh: true
+            )
+        }
+
+        var changedPaths: Set<String> {
+            dirtyFilePaths
+                .union(dirtyDirectoryPaths)
+                .union(dirtyRecursivePaths)
+        }
 
         var isEmpty: Bool {
-            changedPaths.isEmpty && gitMetadataChangedPaths.isEmpty
+            changedPaths.isEmpty
+                && gitMetadataChangedPaths.isEmpty
+                && !requiresWorkspaceRescan
+                && !requiresFullGitRefresh
         }
     }
 
     private struct PendingChange {
-        var changedPaths = Set<String>()
+        var dirtyFilePaths = Set<String>()
+        var dirtyDirectoryPaths = Set<String>()
+        var dirtyRecursivePaths = Set<String>()
         var gitMetadataChangedPaths = Set<String>()
+        var requiresWorkspaceRescan = false
+        var requiresFullGitRefresh = false
 
         mutating func formUnion(_ change: Change) {
-            changedPaths.formUnion(change.changedPaths)
+            dirtyFilePaths.formUnion(change.dirtyFilePaths)
+            dirtyDirectoryPaths.formUnion(change.dirtyDirectoryPaths)
+            dirtyRecursivePaths.formUnion(change.dirtyRecursivePaths)
             gitMetadataChangedPaths.formUnion(change.gitMetadataChangedPaths)
+            requiresWorkspaceRescan = requiresWorkspaceRescan || change.requiresWorkspaceRescan
+            requiresFullGitRefresh = requiresFullGitRefresh || change.requiresFullGitRefresh
         }
 
         func change(rootURL: URL) -> Change {
             Change(
                 rootURL: rootURL,
-                changedPaths: changedPaths,
-                gitMetadataChangedPaths: gitMetadataChangedPaths
+                dirtyFilePaths: dirtyFilePaths,
+                dirtyDirectoryPaths: dirtyDirectoryPaths,
+                dirtyRecursivePaths: dirtyRecursivePaths,
+                gitMetadataChangedPaths: gitMetadataChangedPaths,
+                requiresWorkspaceRescan: requiresWorkspaceRescan,
+                requiresFullGitRefresh: requiresFullGitRefresh
             )
         }
+    }
+
+    struct FileSystemEvent: Equatable {
+        let path: String
+        let flags: FSEventStreamEventFlags
     }
 
     typealias ChangeHandler = @MainActor (Change) -> Void
@@ -119,8 +202,8 @@ final class ProjectFileWatcher {
         }
     }
 
-    fileprivate func receiveFileSystemEvents(paths: [String]) {
-        let changes = classifiedChanges(for: paths)
+    fileprivate func receiveFileSystemEvents(_ events: [FileSystemEvent]) {
+        let changes = classifiedEventChanges(for: events)
 
         for change in changes {
             scheduleChangeNotification(change)
@@ -128,11 +211,25 @@ final class ProjectFileWatcher {
     }
 
     func classifiedChanges(for paths: [String]) -> [Change] {
-        classifiedChanges(for: paths, rootURLs: Array(streamsByRootURL.keys))
+        classifiedEventChanges(
+            for: paths.map { FileSystemEvent(path: $0, flags: 0) },
+            rootURLs: Array(streamsByRootURL.keys)
+        )
     }
 
     func classifiedChanges(for paths: [String], rootURLs: [URL]) -> [Change] {
-        guard !paths.isEmpty else {
+        classifiedEventChanges(
+            for: paths.map { FileSystemEvent(path: $0, flags: 0) },
+            rootURLs: rootURLs
+        )
+    }
+
+    func classifiedEventChanges(for events: [FileSystemEvent]) -> [Change] {
+        classifiedEventChanges(for: events, rootURLs: Array(streamsByRootURL.keys))
+    }
+
+    func classifiedEventChanges(for events: [FileSystemEvent], rootURLs: [URL]) -> [Change] {
+        guard !events.isEmpty else {
             return []
         }
 
@@ -144,8 +241,8 @@ final class ProjectFileWatcher {
         }
         var changesByRootURL: [URL: PendingChange] = [:]
 
-        for eventPath in paths {
-            let normalizedEventPath = normalizedPath(eventPath)
+        for event in events {
+            let normalizedEventPath = normalizedPath(event.path)
 
             guard let (rootURL, rootPath) = rootPairs.first(where: { _, rootPath in
                 normalizedEventPath == rootPath
@@ -162,11 +259,17 @@ final class ProjectFileWatcher {
                 changesByRootURL[rootURL, default: PendingChange()]
                     .gitMetadataChangedPaths
                     .insert(normalizedEventPath)
-            } else {
-                changesByRootURL[rootURL, default: PendingChange()]
-                    .changedPaths
-                    .insert(normalizedEventPath)
+                changesByRootURL[rootURL, default: PendingChange()].requiresFullGitRefresh = true
+                continue
             }
+
+            var pendingChange = changesByRootURL[rootURL, default: PendingChange()]
+            classify(
+                normalizedEventPath,
+                flags: event.flags,
+                into: &pendingChange
+            )
+            changesByRootURL[rootURL] = pendingChange
         }
 
         return changesByRootURL
@@ -174,7 +277,71 @@ final class ProjectFileWatcher {
             .filter { !$0.isEmpty }
     }
 
+    private func classify(
+        _ path: String,
+        flags: FSEventStreamEventFlags,
+        into pendingChange: inout PendingChange
+    ) {
+        if flags.containsAny([
+            FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagUserDropped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagKernelDropped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagEventIdsWrapped),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagMount),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagUnmount)
+        ]) {
+            pendingChange.dirtyRecursivePaths.insert(path)
+            pendingChange.requiresWorkspaceRescan = true
+            pendingChange.requiresFullGitRefresh = true
+            return
+        }
+
+        let isDirectory = flags.contains(FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir))
+        let isCreatedOrDeletedOrRenamed = flags.containsAny([
+            FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved),
+            FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed)
+        ])
+
+        if isDirectory {
+            if isCreatedOrDeletedOrRenamed {
+                pendingChange.dirtyRecursivePaths.insert(path)
+                if let parentPath = parentPath(for: path) {
+                    pendingChange.dirtyDirectoryPaths.insert(parentPath)
+                }
+            } else {
+                pendingChange.dirtyDirectoryPaths.insert(path)
+            }
+            return
+        }
+
+        pendingChange.dirtyFilePaths.insert(path)
+        if isCreatedOrDeletedOrRenamed,
+           let parentPath = parentPath(for: path) {
+            pendingChange.dirtyDirectoryPaths.insert(parentPath)
+        }
+    }
+
+    private func parentPath(for path: String) -> String? {
+        let parent = NSString(string: path).deletingLastPathComponent
+        return parent.isEmpty || parent == path ? nil : normalizedPath(parent)
+    }
+
     private func scheduleChangeNotification(_ change: Change) {
+        var change = change
+        if change.changedPaths.count > 64 {
+            change = Change(
+                rootURL: change.rootURL,
+                dirtyFilePaths: change.dirtyFilePaths,
+                dirtyDirectoryPaths: change.dirtyDirectoryPaths,
+                dirtyRecursivePaths: change.dirtyRecursivePaths,
+                gitMetadataChangedPaths: change.gitMetadataChangedPaths,
+                requiresWorkspaceRescan: change.requiresWorkspaceRescan,
+                requiresFullGitRefresh: true
+            )
+        }
+
         let rootURL = change.rootURL
         pendingChangesByRootURL[rootURL, default: PendingChange()].formUnion(change)
         debounceTasksByRootURL[rootURL]?.cancel()
@@ -188,7 +355,7 @@ final class ProjectFileWatcher {
             await MainActor.run {
                 guard let self else { return }
                 let change = self.pendingChangesByRootURL[rootURL]?.change(rootURL: rootURL)
-                    ?? Change(rootURL: rootURL, changedPaths: [], gitMetadataChangedPaths: [])
+                    ?? Change(rootURL: rootURL, dirtyFilePaths: [])
                 self.pendingChangesByRootURL[rootURL] = nil
                 self.debounceTasksByRootURL[rootURL] = nil
                 guard !change.isEmpty else { return }
@@ -228,13 +395,30 @@ final class ProjectFileWatcher {
     }
 }
 
-private let projectFileWatcherCallback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
+private let projectFileWatcherCallback: FSEventStreamCallback = { _, info, numEvents, eventPaths, eventFlags, _ in
     guard let info else { return }
 
     let watcher = Unmanaged<ProjectFileWatcher>.fromOpaque(info).takeUnretainedValue()
     let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] ?? []
+    let flags = Array(UnsafeBufferPointer(start: eventFlags, count: numEvents))
+    let events = paths.enumerated().map { index, path in
+        ProjectFileWatcher.FileSystemEvent(
+            path: path,
+            flags: index < flags.count ? flags[index] : 0
+        )
+    }
 
     Task { @MainActor in
-        watcher.receiveFileSystemEvents(paths: paths)
+        watcher.receiveFileSystemEvents(events)
+    }
+}
+
+private extension FSEventStreamEventFlags {
+    func contains(_ flag: FSEventStreamEventFlags) -> Bool {
+        self & flag != 0
+    }
+
+    func containsAny(_ flags: [FSEventStreamEventFlags]) -> Bool {
+        flags.contains { contains($0) }
     }
 }

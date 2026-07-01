@@ -4,6 +4,7 @@
 - このプロジェクトは `Ruri.xcodeproj` で開くmacOS SwiftUIアプリ。
 - App targetのSwift module名は `ruri` に固定し、`RuriTests` は `@testable import ruri` で参照する。
 - 設定済みのMac Development証明書がない環境では通常の署名が失敗することがある。コード検証では `CODE_SIGNING_ALLOWED=NO` を使う。
+- Javaシンボルジャンプは同梱 `java-symbol-resolver.jar`（JavaParser + JavaSymbolSolver）を使う。ローカル確認では `Scripts/build-java-symbol-resolver.sh` でJARを生成し、実行環境にはJava 17以上が必要。
 
 ```sh
 xcodebuild -project Ruri.xcodeproj -scheme Ruri -destination platform=macOS -derivedDataPath /private/tmp/ruri-derived-data CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build

@@ -115,7 +115,8 @@ final class EditorState: ObservableObject {
         var githubPullRequestRefreshRequestID: UUID?
         var isRefreshingFileSystem = false
         var hasPendingFileSystemRefresh = false
-        var pendingChangedPaths = Set<String>()
+        var pendingFileSystemChange: ProjectFileWatcher.Change?
+        var pendingDocumentRefreshes: [OpenDocument.ID: DocumentRefresh] = [:]
 
         init(url: URL, displayNameOverride: String? = nil) {
             let standardizedURL = url.standardizedFileURL
@@ -158,6 +159,7 @@ final class EditorState: ObservableObject {
     private let gitService: any GitServiceProtocol
     private let githubPullRequestService: any GitHubPullRequestServiceProtocol
     private let worktreeMetadataStore: any WorktreeMetadataStoring
+    private let worktreeInitializationStore: any WorktreeInitializationStoring
     private let worktreeInitializationService: any WorktreeInitializationServiceProtocol
     private let isFileWatchingEnabled: Bool
     private let gitSnapshotRefreshDelayNanoseconds: UInt64
@@ -183,6 +185,9 @@ final class EditorState: ObservableObject {
             await self?.handleExternalProjectChange(change)
         }
     }
+    private var focusedEditorWorkspaceID: ProjectWorkspaceSnapshot.ID?
+    private var focusedEditorTabID: EditorTab.ID?
+    private var symbolReindexTasksByWorkspaceID: [ProjectWorkspaceSnapshot.ID: Task<Void, Never>] = [:]
 
     private struct WorktreeMemoPersistenceKey: Equatable, Sendable {
         let branchName: String
@@ -324,6 +329,24 @@ final class EditorState: ObservableObject {
         )
     }
 
+    private func worktreeInitializationMetadataLocation(
+        for workspaceID: ProjectWorkspaceSnapshot.ID
+    ) -> WorktreeInitializationMetadataLocation? {
+        guard let index = workspaceIndex(for: workspaceID) else { return nil }
+
+        guard let snapshot = workspaces[index].gitSnapshot else {
+            return WorktreeInitializationMetadataLocation(
+                metadataDirectoryURL: fallbackMetadataDirectoryURL(for: workspaces[index].url),
+                repositoryRootURL: workspaces[index].url
+            )
+        }
+
+        return WorktreeInitializationMetadataLocation(
+            metadataDirectoryURL: metadataDirectoryURL(for: workspaceID, snapshot: snapshot),
+            repositoryRootURL: metadataRepositoryRootURL(for: workspaceID, snapshot: snapshot)
+        )
+    }
+
     var agentStatusDirectoryURL: URL? {
         guard let index = activeWorkspaceIndex else { return nil }
 
@@ -356,6 +379,7 @@ final class EditorState: ObservableObject {
         gitService: any GitServiceProtocol = GitService(),
         githubPullRequestService: any GitHubPullRequestServiceProtocol = GitHubPullRequestService(),
         worktreeMetadataStore: any WorktreeMetadataStoring = WorktreeMetadataStore(),
+        worktreeInitializationStore: any WorktreeInitializationStoring = WorktreeInitializationStore(),
         worktreeInitializationService: any WorktreeInitializationServiceProtocol = WorktreeInitializationService(),
         isFileWatchingEnabled: Bool = true,
         gitSnapshotRefreshDelayNanoseconds: UInt64 = 1_500_000_000
@@ -365,6 +389,7 @@ final class EditorState: ObservableObject {
         self.gitService = gitService
         self.githubPullRequestService = githubPullRequestService
         self.worktreeMetadataStore = worktreeMetadataStore
+        self.worktreeInitializationStore = worktreeInitializationStore
         self.worktreeInitializationService = worktreeInitializationService
         self.isFileWatchingEnabled = isFileWatchingEnabled
         self.gitSnapshotRefreshDelayNanoseconds = gitSnapshotRefreshDelayNanoseconds
@@ -386,6 +411,7 @@ final class EditorState: ObservableObject {
             reviewBaseSaveTask?.cancel()
             reviewDiffRemoteBranchLoadTask?.cancel()
             reviewDiffRefreshTask?.cancel()
+            symbolReindexTasksByWorkspaceID.values.forEach { $0.cancel() }
         }
     }
 
@@ -521,6 +547,10 @@ final class EditorState: ObservableObject {
         do {
             let workspaceID = try await createWorktree(
                 fromRemoteBranch: request.remoteBranchName,
+                sourceWorkspaceID: request.sourceWorkspaceID
+            )
+            try await initializeCreatedWorktreeFromSavedCommand(
+                workspaceID,
                 sourceWorkspaceID: request.sourceWorkspaceID
             )
             activeProjectID = workspaceID
@@ -1026,7 +1056,7 @@ final class EditorState: ObservableObject {
         return workspaceID
     }
 
-    func initializeWorktree(
+    func initializeCreatedWorktree(
         _ workspaceID: ProjectWorkspaceSnapshot.ID,
         command: String
     ) async throws {
@@ -1037,8 +1067,31 @@ final class EditorState: ObservableObject {
 
         let workspaceURL = workspaces[index].url
         try await worktreeInitializationService.run(command: command, in: workspaceURL)
-        await refreshWorkspaceFileSystem(workspaceID, changedPaths: [])
-        await refreshGitState(for: workspaceID)
+        await refreshWorkspaceFileSystem(
+            workspaceID,
+            change: .workspaceRescan(rootURL: workspaceURL)
+        )
+    }
+
+    private func initializeCreatedWorktreeFromSavedCommand(
+        _ workspaceID: ProjectWorkspaceSnapshot.ID,
+        sourceWorkspaceID: ProjectWorkspaceSnapshot.ID
+    ) async throws {
+        let command = await savedWorktreeInitializationCommand(for: sourceWorkspaceID)
+        try await initializeCreatedWorktree(workspaceID, command: command)
+    }
+
+    private func savedWorktreeInitializationCommand(
+        for sourceWorkspaceID: ProjectWorkspaceSnapshot.ID
+    ) async -> String {
+        guard let location = worktreeInitializationMetadataLocation(for: sourceWorkspaceID) else {
+            return ""
+        }
+
+        let document = await worktreeInitializationStore.load(
+            metadataDirectoryURL: location.metadataDirectoryURL
+        )
+        return document.initializationCommand
     }
 
     @discardableResult
@@ -1092,8 +1145,10 @@ final class EditorState: ObservableObject {
         try await gitService.pull(openedRootURL: targetURL)
 
         clearError()
-        await refreshWorkspaceFileSystem(workspaceID, changedPaths: [])
-        await refreshGitState(for: workspaceID)
+        await refreshWorkspaceFileSystem(
+            workspaceID,
+            change: .workspaceRescan(rootURL: targetURL)
+        )
     }
 
     func switchGitBranch(named branchName: String) async throws {
@@ -1109,7 +1164,10 @@ final class EditorState: ObservableObject {
 
         try await gitService.switchBranch(named: branchName, openedRootURL: workspaceURL)
         clearError()
-        await refreshWorkspaceFileSystem(workspaceID, changedPaths: [])
+        await refreshWorkspaceFileSystem(
+            workspaceID,
+            change: .workspaceRescan(rootURL: workspaceURL)
+        )
     }
 
     private func replacementWorkspaceID(
@@ -1417,6 +1475,37 @@ final class EditorState: ObservableObject {
         workspaces[index].documentStore.updateScrollOrigin(scrollOrigin, for: tab.documentID)
     }
 
+    func focusEditor(tabID: EditorTab.ID) {
+        guard let index = activeWorkspaceIndex,
+              workspaces[index].tabStore.tab(for: tabID) != nil else {
+            return
+        }
+
+        let workspaceID = workspaces[index].id
+        if focusedEditorWorkspaceID == workspaceID,
+           focusedEditorTabID == tabID,
+           workspaces[index].pendingDocumentRefreshes.isEmpty {
+            return
+        }
+
+        focusedEditorWorkspaceID = workspaces[index].id
+        focusedEditorTabID = tabID
+        guard let tab = workspaces[index].tabStore.tab(for: tabID) else { return }
+        if applyPendingDocumentRefresh(for: tab.documentID, in: index) {
+            publishTabState()
+        }
+    }
+
+    func blurEditor(tabID: EditorTab.ID) {
+        guard focusedEditorWorkspaceID == activeProjectID,
+              focusedEditorTabID == tabID else {
+            return
+        }
+
+        focusedEditorWorkspaceID = nil
+        focusedEditorTabID = nil
+    }
+
     func revealRange(_ range: NSRange, in id: EditorTab.ID) {
         guard let index = activeWorkspaceIndex,
               requestRevealRange(range, in: id, workspaceIndex: index) else {
@@ -1456,6 +1545,27 @@ final class EditorState: ObservableObject {
         }
 
         return closedDocument
+    }
+
+    func lineContentRange(lineNumber: Int, in url: URL) async -> NSRange? {
+        if let workspaceID = activeProjectID,
+           let index = workspaceIndex(for: workspaceID),
+           let tab = tab(containing: url, in: index),
+           let document = workspaces[index].documentStore.document(for: tab.documentID) {
+            return ReviewDiffCodeNavigationRequest.lineContentRange(
+                lineNumber: lineNumber,
+                in: document.text
+            )
+        }
+
+        guard let text = try? await fileService.readUTF8File(at: url) else {
+            return nil
+        }
+
+        return ReviewDiffCodeNavigationRequest.lineContentRange(
+            lineNumber: lineNumber,
+            in: text
+        )
     }
 
     func navigateBackInHistory() async {
@@ -1563,6 +1673,18 @@ final class EditorState: ObservableObject {
 
         case .references(let targets):
             guard !targets.isEmpty else { return nil }
+            if targets.count == 1,
+               let target = targets.first {
+                let closedDocument = await navigateToCodeTarget(
+                    target,
+                    sourceDocumentID: sourceTab.documentID,
+                    origin: origin,
+                    workspaceID: workspaceID,
+                    initialWorkspaceIndex: index
+                )
+                return .navigated(closedDocument)
+            }
+
             let results = await codeUsageResults(for: targets, workspaceID: workspaceID)
             guard activeProjectID == workspaceID else { return nil }
             guard !results.isEmpty else { return nil }
@@ -1628,6 +1750,19 @@ final class EditorState: ObservableObject {
 
         case .references(let targets):
             guard !targets.isEmpty else { return nil }
+            if targets.count == 1,
+               let target = targets.first {
+                setEditorMode(.edit)
+                let closedDocument = await navigateToCodeTarget(
+                    target,
+                    sourceDocumentID: source.sourceDocumentID,
+                    origin: origin,
+                    workspaceID: workspaceID,
+                    initialWorkspaceIndex: currentIndex
+                )
+                return .navigated(closedDocument)
+            }
+
             let results = await codeUsageResults(for: targets, workspaceID: workspaceID)
             guard activeProjectID == workspaceID else { return nil }
             guard !results.isEmpty else { return nil }
@@ -1780,8 +1915,17 @@ final class EditorState: ObservableObject {
     ) async -> SaveTabResult {
         guard let workspaceID,
               let index = workspaceIndex(for: workspaceID),
-              let tab = workspaces[index].tabStore.tab(for: id),
-              let document = workspaces[index].documentStore.document(for: tab.documentID) else {
+              let tab = workspaces[index].tabStore.tab(for: id) else {
+            return .skipped
+        }
+
+        applyPendingDocumentRefresh(for: tab.documentID, in: index)
+        if activeProjectID == workspaceID {
+            publishTabState()
+        }
+
+        guard let currentIndex = workspaceIndex(for: workspaceID),
+              let document = workspaces[currentIndex].documentStore.document(for: tab.documentID) else {
             return .skipped
         }
 
@@ -1840,20 +1984,23 @@ final class EditorState: ObservableObject {
         for rootURL: URL,
         changedPaths: Set<String> = []
     ) async {
+        let change: ProjectFileWatcher.Change = changedPaths.isEmpty
+            ? .workspaceRescan(rootURL: rootURL)
+            : .fileChange(rootURL: rootURL, paths: changedPaths)
         await refreshExternalProjectContentChange(
             for: rootURL,
-            changedPaths: changedPaths
+            change: change
         )
     }
 
     func handleExternalProjectChange(_ change: ProjectFileWatcher.Change) async {
         var refreshedWorkspaceIDs = Set<ProjectWorkspaceSnapshot.ID>()
 
-        if !change.changedPaths.isEmpty {
+        if !change.changedPaths.isEmpty || change.requiresWorkspaceRescan {
             let workspaceID = normalizedProjectID(for: change.rootURL)
             await refreshExternalProjectContentChange(
                 for: change.rootURL,
-                changedPaths: change.changedPaths
+                change: change
             )
             refreshedWorkspaceIDs.insert(workspaceID)
         }
@@ -1867,29 +2014,36 @@ final class EditorState: ObservableObject {
 
     private func refreshExternalProjectContentChange(
         for rootURL: URL,
-        changedPaths: Set<String>
+        change: ProjectFileWatcher.Change
     ) async {
         let workspaceID = normalizedProjectID(for: rootURL)
         guard let index = workspaceIndex(for: workspaceID) else { return }
 
         if workspaces[index].isRefreshingFileSystem {
             workspaces[index].hasPendingFileSystemRefresh = true
-            workspaces[index].pendingChangedPaths.formUnion(changedPaths)
+            workspaces[index].pendingFileSystemChange = mergedFileSystemChange(
+                workspaces[index].pendingFileSystemChange,
+                change
+            )
             return
         }
 
-        workspaces[index].pendingChangedPaths.formUnion(changedPaths)
+        workspaces[index].pendingFileSystemChange = mergedFileSystemChange(
+            workspaces[index].pendingFileSystemChange,
+            change
+        )
         workspaces[index].isRefreshingFileSystem = true
 
         while true {
             guard let currentIndex = workspaceIndex(for: workspaceID) else { return }
 
-            let pendingChangedPaths = workspaces[currentIndex].pendingChangedPaths
-            workspaces[currentIndex].pendingChangedPaths = []
+            let pendingChange = workspaces[currentIndex].pendingFileSystemChange
+                ?? ProjectFileWatcher.Change(rootURL: rootURL.standardizedFileURL, dirtyFilePaths: [])
+            workspaces[currentIndex].pendingFileSystemChange = nil
             workspaces[currentIndex].hasPendingFileSystemRefresh = false
             await refreshWorkspaceFileSystem(
                 workspaceID,
-                changedPaths: pendingChangedPaths
+                change: pendingChange
             )
 
             guard let refreshedIndex = workspaceIndex(for: workspaceID) else { return }
@@ -1901,6 +2055,23 @@ final class EditorState: ObservableObject {
             workspaces[refreshedIndex].isRefreshingFileSystem = false
             break
         }
+    }
+
+    private func mergedFileSystemChange(
+        _ existing: ProjectFileWatcher.Change?,
+        _ change: ProjectFileWatcher.Change
+    ) -> ProjectFileWatcher.Change {
+        guard let existing else { return change }
+
+        return ProjectFileWatcher.Change(
+            rootURL: existing.rootURL,
+            dirtyFilePaths: existing.dirtyFilePaths.union(change.dirtyFilePaths),
+            dirtyDirectoryPaths: existing.dirtyDirectoryPaths.union(change.dirtyDirectoryPaths),
+            dirtyRecursivePaths: existing.dirtyRecursivePaths.union(change.dirtyRecursivePaths),
+            gitMetadataChangedPaths: existing.gitMetadataChangedPaths.union(change.gitMetadataChangedPaths),
+            requiresWorkspaceRescan: existing.requiresWorkspaceRescan || change.requiresWorkspaceRescan,
+            requiresFullGitRefresh: existing.requiresFullGitRefresh || change.requiresFullGitRefresh
+        )
     }
 
     private func refreshGitMetadataChanges(
@@ -2279,7 +2450,7 @@ final class EditorState: ObservableObject {
 
     private func symbolNavigationOpenDocuments(in workspaceIndex: Int) -> [SymbolNavigationOpenDocument] {
         workspaces[workspaceIndex].documentStore.documents.compactMap { document in
-            guard ["java", "kt", "kts"].contains(document.url.pathExtension.lowercased()) else {
+            guard document.url.pathExtension.lowercased() == "java" else {
                 return nil
             }
 
@@ -2291,7 +2462,7 @@ final class EditorState: ObservableObject {
         in workspaceIndex: Int,
         including sourceDocument: SymbolNavigationOpenDocument
     ) -> [SymbolNavigationOpenDocument] {
-        guard ["java", "kt", "kts"].contains(sourceDocument.url.pathExtension.lowercased()) else {
+        guard sourceDocument.url.pathExtension.lowercased() == "java" else {
             return symbolNavigationOpenDocuments(in: workspaceIndex)
         }
 
@@ -2362,28 +2533,34 @@ final class EditorState: ObservableObject {
 
     private func refreshWorkspaceFileSystem(
         _ workspaceID: ProjectWorkspaceSnapshot.ID,
-        changedPaths: Set<String>
+        change: ProjectFileWatcher.Change
     ) async {
         guard let index = workspaceIndex(for: workspaceID) else { return }
 
-        let directoryURLs = workspaces[index].projectTree.refreshDirectoryURLs()
+        let plan = WorkspaceFileSystemRefreshPlan.make(
+            change: change,
+            workspaceURL: workspaces[index].url,
+            loadedDirectoryURLs: workspaces[index].projectTree.refreshDirectoryURLs()
+        )
         let documents = workspaces[index].documentStore.documents
         let workspaceURL = workspaces[index].url
         let directorySnapshots = await loadDirectorySnapshots(
-            for: directoryURLs,
+            for: plan.treeDirectoryURLs,
             projectRootURL: workspaceURL
         )
         let documentRefreshes = await loadDocumentRefreshes(
             for: documents,
-            changedPaths: changedPaths
+            change: plan.documentRefreshChange
         )
 
         guard let currentIndex = workspaceIndex(for: workspaceID) else { return }
 
-        workspaces[currentIndex].projectTree.refreshLoadedDirectories(directorySnapshots)
+        if plan.hasTreeRefresh, directorySnapshots[workspaceURL.standardizedFileURL] != nil {
+            workspaces[currentIndex].projectTree.refreshLoadedDirectories(directorySnapshots)
+        }
 
         for refresh in documentRefreshes {
-            applyDocumentRefresh(refresh, in: currentIndex)
+            applyOrDeferDocumentRefresh(refresh, in: currentIndex)
         }
 
         if activeProjectID == workspaceID {
@@ -2392,18 +2569,18 @@ final class EditorState: ObservableObject {
         }
 
         publishFileChangeNotification(for: workspaces[currentIndex].url)
-        await symbolNavigationService.refreshChangedFiles(
-            projectURL: workspaces[currentIndex].url,
-            changedPaths: changedPaths,
-            startIndexingIfMissing: activeProjectID == workspaceID
-        )
+        await refreshSymbolIndex(for: workspaceID, change: plan.symbolChange)
 
-        let didRefreshGitIncrementally = await refreshGitStateForChangedPaths(
-            changedPaths,
-            in: workspaceID
-        )
-        if !didRefreshGitIncrementally {
+        if plan.requiresFullGitRefresh {
             await refreshGitState(for: workspaceID)
+        } else {
+            let didRefreshGitIncrementally = await refreshGitStateForChangedPaths(
+                plan.gitChange.changedPaths,
+                in: workspaceID
+            )
+            if !didRefreshGitIncrementally {
+                await refreshGitState(for: workspaceID)
+            }
         }
     }
 
@@ -2412,6 +2589,115 @@ final class EditorState: ObservableObject {
         case deleted(OpenDocument.ID)
         case snapshot(OpenDocument.ID, ProjectFileSnapshot)
         case unreadable(OpenDocument.ID, ProjectFileSignature?)
+
+        var documentID: OpenDocument.ID? {
+            switch self {
+            case .unchanged:
+                nil
+            case .deleted(let documentID),
+                 .snapshot(let documentID, _),
+                 .unreadable(let documentID, _):
+                documentID
+            }
+        }
+    }
+
+    private struct WorkspaceFileSystemRefreshPlan {
+        let change: ProjectFileWatcher.Change
+        let treeDirectoryURLs: [URL]
+        let documentRefreshChange: ProjectFileWatcher.Change
+        let symbolChange: ProjectFileWatcher.Change
+        let gitChange: ProjectFileWatcher.Change
+        let requiresFullGitRefresh: Bool
+
+        var hasTreeRefresh: Bool {
+            !treeDirectoryURLs.isEmpty
+        }
+
+        static func make(
+            change: ProjectFileWatcher.Change,
+            workspaceURL: URL,
+            loadedDirectoryURLs: [URL]
+        ) -> WorkspaceFileSystemRefreshPlan {
+            let treeDirectoryURLs = treeRefreshURLs(
+                from: loadedDirectoryURLs,
+                workspaceURL: workspaceURL,
+                change: change
+            )
+            let requiresFullGitRefresh = change.requiresFullGitRefresh
+                || change.requiresWorkspaceRescan
+                || !change.dirtyRecursivePaths.isEmpty
+                || change.changedPaths.count > 64
+
+            return WorkspaceFileSystemRefreshPlan(
+                change: change,
+                treeDirectoryURLs: treeDirectoryURLs,
+                documentRefreshChange: change,
+                symbolChange: change,
+                gitChange: change,
+                requiresFullGitRefresh: requiresFullGitRefresh
+            )
+        }
+
+        private static func treeRefreshURLs(
+            from loadedDirectoryURLs: [URL],
+            workspaceURL: URL,
+            change: ProjectFileWatcher.Change
+        ) -> [URL] {
+            guard change.requiresWorkspaceRescan
+                    || !change.dirtyDirectoryPaths.isEmpty
+                    || !change.dirtyRecursivePaths.isEmpty else {
+                return []
+            }
+
+            let standardizedWorkspaceURL = workspaceURL.standardizedFileURL
+            let rootPath = FileURLRewriter.normalizedPath(standardizedWorkspaceURL)
+
+            if change.requiresWorkspaceRescan {
+                return uniqueRefreshURLs([standardizedWorkspaceURL] + loadedDirectoryURLs)
+            }
+
+            let dirtyDirectoryPaths = normalizedChangedPaths(change.dirtyDirectoryPaths)
+            let dirtyRecursivePaths = normalizedChangedPaths(change.dirtyRecursivePaths)
+            let matchedLoadedDirectories = loadedDirectoryURLs.filter { directoryURL in
+                let directoryPath = FileURLRewriter.normalizedPath(directoryURL)
+                if directoryPath == rootPath { return false }
+
+                if dirtyDirectoryPaths.contains(directoryPath) {
+                    return true
+                }
+
+                return dirtyRecursivePaths.contains { dirtyPath in
+                    if dirtyPath == directoryPath { return true }
+
+                    let dirtyPrefix = dirtyPath.hasSuffix("/") ? dirtyPath : "\(dirtyPath)/"
+                    let directoryPrefix = directoryPath.hasSuffix("/") ? directoryPath : "\(directoryPath)/"
+                    return directoryPath.hasPrefix(dirtyPrefix) || dirtyPath.hasPrefix(directoryPrefix)
+                }
+            }
+
+            return uniqueRefreshURLs([standardizedWorkspaceURL] + matchedLoadedDirectories)
+        }
+
+        private static func uniqueRefreshURLs(_ urls: [URL]) -> [URL] {
+            var seenPaths = Set<String>()
+            var result: [URL] = []
+
+            for url in urls {
+                let standardizedURL = url.standardizedFileURL
+                let path = FileURLRewriter.normalizedPath(standardizedURL)
+                guard !seenPaths.contains(path) else { continue }
+
+                seenPaths.insert(path)
+                result.append(standardizedURL)
+            }
+
+            return result
+        }
+
+        private static func normalizedChangedPaths(_ paths: Set<String>) -> Set<String> {
+            Set(paths.map { FileURLRewriter.normalizedPath(URL(filePath: $0)) })
+        }
     }
 
     private func loadDirectorySnapshots(
@@ -2435,6 +2721,10 @@ final class EditorState: ObservableObject {
                             )
                         )
                     } catch {
+                        if FileURLRewriter.urlsMatch(url, projectRootURL),
+                           !Self.directoryExists(at: url) {
+                            return (url, [])
+                        }
                         return (url, nil)
                     }
                 }
@@ -2448,22 +2738,19 @@ final class EditorState: ObservableObject {
                 }
             }
 
-            if snapshots[projectRootURL] == nil {
-                snapshots[projectRootURL] = []
-            }
-
             return snapshots
         }
     }
 
     private func loadDocumentRefreshes(
         for documents: [OpenDocument],
-        changedPaths: Set<String>
+        change: ProjectFileWatcher.Change
     ) async -> [DocumentRefresh] {
         guard !documents.isEmpty else { return [] }
 
         let fileService = fileService
-        let normalizedChangedPaths = normalizedChangedPaths(changedPaths)
+        let normalizedDirtyFilePaths = normalizedChangedPaths(change.dirtyFilePaths)
+        let normalizedDirtyRecursivePaths = normalizedChangedPaths(change.dirtyRecursivePaths)
 
         return await withTaskGroup(of: DocumentRefresh.self) { group in
             for document in documents {
@@ -2480,10 +2767,9 @@ final class EditorState: ObservableObject {
                         return .deleted(document.id)
                     }
 
-                    let shouldCompareContents = Self.changedPaths(
-                        normalizedChangedPaths,
-                        mayAffect: document.url
-                    )
+                    let shouldCompareContents = change.requiresWorkspaceRescan
+                        || Self.changedPaths(normalizedDirtyFilePaths, mayAffect: document.url)
+                        || Self.changedPaths(normalizedDirtyRecursivePaths, mayAffect: document.url)
                     let signatureMatches = signature == document.lastKnownFileSignature
 
                     guard document.lastKnownFileSignature == nil
@@ -2533,6 +2819,72 @@ final class EditorState: ObservableObject {
                 documentID,
                 signature: signature
             )
+        }
+    }
+
+    private func applyOrDeferDocumentRefresh(_ refresh: DocumentRefresh, in workspaceIndex: Int) {
+        guard let documentID = refresh.documentID else { return }
+
+        if shouldDeferDocumentRefresh() {
+            workspaces[workspaceIndex].pendingDocumentRefreshes[documentID] = refresh
+        } else {
+            applyDocumentRefresh(refresh, in: workspaceIndex)
+            workspaces[workspaceIndex].pendingDocumentRefreshes[documentID] = nil
+        }
+    }
+
+    @discardableResult
+    private func applyPendingDocumentRefresh(for documentID: OpenDocument.ID, in workspaceIndex: Int) -> Bool {
+        guard let refresh = workspaces[workspaceIndex].pendingDocumentRefreshes.removeValue(forKey: documentID) else {
+            return false
+        }
+
+        applyDocumentRefresh(refresh, in: workspaceIndex)
+        return true
+    }
+
+    private func shouldDeferDocumentRefresh() -> Bool {
+        editorMode == .edit
+    }
+
+    private func refreshSymbolIndex(
+        for workspaceID: ProjectWorkspaceSnapshot.ID,
+        change: ProjectFileWatcher.Change
+    ) async {
+        guard let index = workspaceIndex(for: workspaceID) else { return }
+
+        let shouldReindex = change.requiresWorkspaceRescan || change.dirtyRecursivePaths.count > 4
+        if shouldReindex {
+            scheduleSymbolReindex(for: workspaceID)
+            return
+        }
+
+        let changedPaths = change.dirtyFilePaths
+            .union(change.dirtyDirectoryPaths)
+            .union(change.dirtyRecursivePaths)
+        await symbolNavigationService.refreshChangedFiles(
+            projectURL: workspaces[index].url,
+            changedPaths: changedPaths,
+            startIndexingIfMissing: activeProjectID == workspaceID
+        )
+    }
+
+    private func scheduleSymbolReindex(for workspaceID: ProjectWorkspaceSnapshot.ID) {
+        symbolReindexTasksByWorkspaceID[workspaceID]?.cancel()
+        symbolReindexTasksByWorkspaceID[workspaceID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+            } catch {
+                return
+            }
+
+            guard let self,
+                  let index = self.workspaceIndex(for: workspaceID) else {
+                return
+            }
+
+            self.symbolReindexTasksByWorkspaceID[workspaceID] = nil
+            self.symbolNavigationService.startIndexing(projectURL: self.workspaces[index].url)
         }
     }
 
@@ -2631,6 +2983,16 @@ final class EditorState: ObservableObject {
 
         let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
         return path.hasPrefix(rootPathPrefix)
+    }
+
+    nonisolated private static func directoryExists(at url: URL) -> Bool {
+        let path = url.path(percentEncoded: false)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileType = attributes[.type] as? FileAttributeType else {
+            return false
+        }
+
+        return fileType == .typeDirectory
     }
 
     private func directoryAncestors(of fileURL: URL, within rootURL: URL) -> [URL] {

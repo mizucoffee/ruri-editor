@@ -109,6 +109,7 @@ private struct GitIgnoreRule {
     let isNegated: Bool
     let isAnchored: Bool
     let directoryOnly: Bool
+    let descendantsOnly: Bool
     let baseComponents: [String]
     let patternComponents: [String]
 
@@ -120,11 +121,12 @@ private struct GitIgnoreRule {
             return nil
         }
 
-        if pattern.hasPrefix("\\#") || pattern.hasPrefix("\\!") {
+        let hasEscapedLeadingPrefix = pattern.hasPrefix("\\#") || pattern.hasPrefix("\\!")
+        if hasEscapedLeadingPrefix {
             pattern.removeFirst()
         }
 
-        let isNegated = pattern.hasPrefix("!")
+        let isNegated = !hasEscapedLeadingPrefix && pattern.hasPrefix("!")
         if isNegated {
             pattern.removeFirst()
             pattern = pattern.trimmingCharacters(in: .whitespaces)
@@ -147,6 +149,7 @@ private struct GitIgnoreRule {
         self.isNegated = isNegated
         self.isAnchored = isAnchored
         self.directoryOnly = directoryOnly
+        self.descendantsOnly = pattern.hasSuffix("/**")
         self.baseComponents = baseComponents
         self.patternComponents = pattern.split(separator: "/").map(String.init)
     }
@@ -159,6 +162,9 @@ private struct GitIgnoreRule {
 
         let localComponents = Array(pathComponents.dropFirst(baseComponents.count))
         guard !localComponents.isEmpty else { return false }
+        if descendantsOnly && localComponents.count <= patternComponents.count - 1 {
+            return false
+        }
 
         if !isAnchored && patternComponents.count == 1 {
             return GlobMatcher.matchComponent(patternComponents[0], localComponents.last ?? "")
@@ -262,6 +268,33 @@ enum GlobMatcher {
                 textIndex: textIndex + 1
             )
 
+        case "[":
+            guard textIndex < text.count,
+                  let characterClass = CharacterClass(pattern: pattern, openingBracketIndex: patternIndex) else {
+                guard textIndex < text.count,
+                      pattern[patternIndex] == text[textIndex] else {
+                    return false
+                }
+
+                return matchComponent(
+                    pattern,
+                    text,
+                    patternIndex: patternIndex + 1,
+                    textIndex: textIndex + 1
+                )
+            }
+
+            guard characterClass.matches(text[textIndex]) else {
+                return false
+            }
+
+            return matchComponent(
+                pattern,
+                text,
+                patternIndex: characterClass.closingBracketIndex + 1,
+                textIndex: textIndex + 1
+            )
+
         case "\\":
             let nextPatternIndex = patternIndex + 1
             guard nextPatternIndex < pattern.count,
@@ -290,5 +323,71 @@ enum GlobMatcher {
                 textIndex: textIndex + 1
             )
         }
+    }
+}
+
+nonisolated private struct CharacterClass {
+    let closingBracketIndex: Int
+
+    private let isNegated: Bool
+    private let members: [Character]
+    private let ranges: [(Character, Character)]
+
+    init?(pattern: [Character], openingBracketIndex: Int) {
+        var index = openingBracketIndex + 1
+        guard index < pattern.count else { return nil }
+
+        var isNegated = false
+        if pattern[index] == "!" || pattern[index] == "^" {
+            isNegated = true
+            index += 1
+        }
+
+        let memberStartIndex = index
+        var members: [Character] = []
+        var ranges: [(Character, Character)] = []
+
+        while index < pattern.count {
+            let character = pattern[index]
+            if character == "]", index > memberStartIndex {
+                self.closingBracketIndex = index
+                self.isNegated = isNegated
+                self.members = members
+                self.ranges = ranges
+                return
+            }
+
+            if index + 2 < pattern.count,
+               pattern[index + 1] == "-",
+               pattern[index + 2] != "]" {
+                ranges.append((character, pattern[index + 2]))
+                index += 3
+            } else {
+                members.append(character)
+                index += 1
+            }
+        }
+
+        return nil
+    }
+
+    func matches(_ character: Character) -> Bool {
+        let matched = members.contains(character) || ranges.contains { lowerBound, upperBound in
+            guard let value = character.scalarValue,
+                  let lower = lowerBound.scalarValue,
+                  let upper = upperBound.scalarValue else {
+                return false
+            }
+
+            return min(lower, upper) <= value && value <= max(lower, upper)
+        }
+
+        return isNegated ? !matched : matched
+    }
+}
+
+nonisolated private extension Character {
+    var scalarValue: UInt32? {
+        unicodeScalars.count == 1 ? unicodeScalars.first?.value : nil
     }
 }

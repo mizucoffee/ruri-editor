@@ -33,6 +33,10 @@ nonisolated struct CodingAgentStatusNotifier: CodingAgentStatusNotifying, Sendab
         }
         content.body = body(for: status, context: context)
         content.sound = .default
+        content.userInfo = [
+            CodingAgentNotificationUserInfoKey.kind: CodingAgentNotificationUserInfoValue.kind,
+            CodingAgentNotificationUserInfoKey.terminalID: status.terminalID.uuidString
+        ]
 
         let request = UNNotificationRequest(
             identifier: "coding-agent-\(status.terminalID.uuidString)-\(status.changeKey.stableNotificationIdentifierSuffix)",
@@ -66,6 +70,15 @@ nonisolated struct CodingAgentStatusNotifier: CodingAgentStatusNotifying, Sendab
         }
         return details.joined(separator: "\n")
     }
+}
+
+enum CodingAgentNotificationUserInfoKey {
+    static let kind = "kind"
+    static let terminalID = "terminalID"
+}
+
+enum CodingAgentNotificationUserInfoValue {
+    static let kind = "codingAgentStatus"
 }
 
 private extension CodingAgentState {

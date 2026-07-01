@@ -16,6 +16,8 @@ final class RuntimeTextView: NSTextView {
     }
 
     private var implementationHoverTrackingArea: NSTrackingArea?
+    private var isHandlingMouseDown = false
+    private var didFocusDuringMouseDown = false
 
     override var undoManager: UndoManager? {
         runtime?.textUndoManager
@@ -37,9 +39,25 @@ final class RuntimeTextView: NSTextView {
         needsDisplay = true
     }
 
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            if isHandlingMouseDown {
+                didFocusDuringMouseDown = true
+            } else {
+                runtime?.notifyTextViewFocused()
+            }
+        }
+        return result
+    }
+
     override func resignFirstResponder() -> Bool {
         runtime?.breakUndoCoalescing()
-        return super.resignFirstResponder()
+        let result = super.resignFirstResponder()
+        if result {
+            runtime?.notifyTextViewBlurred()
+        }
+        return result
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -74,8 +92,23 @@ final class RuntimeTextView: NSTextView {
             return
         }
 
+        isHandlingMouseDown = true
+        didFocusDuringMouseDown = false
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
+        isHandlingMouseDown = false
+
+        if didFocusDuringMouseDown {
+            didFocusDuringMouseDown = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      self.window?.firstResponder === self else {
+                    return
+                }
+
+                self.runtime?.notifyTextViewFocused()
+            }
+        }
     }
 
     override func mouseMoved(with event: NSEvent) {

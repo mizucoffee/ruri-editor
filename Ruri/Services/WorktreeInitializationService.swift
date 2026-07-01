@@ -110,7 +110,13 @@ nonisolated struct WorktreeInitializationService: WorktreeInitializationServiceP
             }
         }
 
-        try process.run()
+        do {
+            try SafeProcessLauncher.run(process)
+        } catch {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            throw error
+        }
 
         let timeoutResult = terminationSemaphore.wait(timeout: .now() + timeout)
         if timeoutResult == .timedOut {

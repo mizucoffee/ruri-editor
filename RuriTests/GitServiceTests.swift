@@ -139,6 +139,17 @@ final class GitServiceTests: XCTestCase {
         XCTAssertEqual(contents, "base\n")
     }
 
+    func testRepositoryStatusDoesNotCrashWhenGitExecutableCannotLaunch() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let status = await GitService(
+            executableURL: URL(filePath: "/tmp/ruri-missing-git-executable")
+        ).repositoryStatus(for: rootURL)
+
+        XCTAssertNil(status.snapshot)
+    }
+
     func testFileSnapshotReportsUntrackedSyntheticDiff() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
@@ -786,9 +797,7 @@ final class GitServiceTests: XCTestCase {
     }
 
     private func initializeRepository(at rootURL: URL) throws {
-        try runGit(["init", "-b", "main"], in: rootURL)
-        try runGit(["config", "user.email", "test@example.com"], in: rootURL)
-        try runGit(["config", "user.name", "Test"], in: rootURL)
+        try TestSupport.initializeRepository(at: rootURL, fileManager: fileManager)
     }
 
     private func makeRemoteBackedRuriBaseFixture() throws -> (
@@ -848,42 +857,10 @@ final class GitServiceTests: XCTestCase {
 
     @discardableResult
     private func runGit(_ arguments: [String], in rootURL: URL) throws -> String {
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.executableURL = try gitExecutableURL()
-        process.arguments = arguments
-        process.currentDirectoryURL = rootURL
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-        guard process.terminationStatus == 0 else {
-            let message = String(data: error, encoding: .utf8) ?? "git failed"
-            XCTFail(message)
-            return ""
-        }
-
-        return String(data: output, encoding: .utf8) ?? ""
-    }
-
-    private func gitExecutableURL() throws -> URL {
-        let url = URL(filePath: "/usr/bin/git")
-        guard fileManager.isExecutableFile(atPath: url.path(percentEncoded: false)) else {
-            throw XCTSkip("git executable is not available")
-        }
-
-        return url
+        try TestSupport.runGit(arguments, in: rootURL, fileManager: fileManager)
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 }

@@ -42,6 +42,11 @@ struct RuriWindowRoot: View {
         .background {
             WindowAccessor { window in
                 ExternalGitHubPullRequestURLRouter.shared.register(editor, window: window)
+                CodingAgentNotificationRouter.shared.register(
+                    editor: editor,
+                    terminalState: terminalState,
+                    window: window
+                )
             }
             .frame(width: 0, height: 0)
         }
@@ -110,10 +115,12 @@ struct RuriWindowRoot: View {
         }
         .onAppear {
             ExternalGitHubPullRequestURLRouter.shared.register(editor)
+            CodingAgentNotificationRouter.shared.register(editor: editor, terminalState: terminalState)
             RuriApplicationTerminationCoordinator.shared.register(editor)
         }
         .onDisappear {
             ExternalGitHubPullRequestURLRouter.shared.unregister(editor)
+            CodingAgentNotificationRouter.shared.unregister(terminalState: terminalState)
             RuriApplicationTerminationCoordinator.shared.unregister(editor)
         }
         .onChange(of: editor.runConfigurationMetadataLocation) { _, location in

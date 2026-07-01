@@ -9,6 +9,8 @@ enum ProjectFileError: LocalizedError, Equatable, Sendable {
     case unreadableUTF8File
     case invalidFileName
     case destinationAlreadyExists
+    case fileSearchExecutableNotFound
+    case fileSearchFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +20,10 @@ enum ProjectFileError: LocalizedError, Equatable, Sendable {
             "使用できないファイル名です"
         case .destinationAlreadyExists:
             "同じ名前のファイルまたはフォルダが既に存在します"
+        case .fileSearchExecutableNotFound:
+            "ファイル検索エンジンが見つかりません"
+        case .fileSearchFailed(let message):
+            message.isEmpty ? "ファイル検索に失敗しました" : "ファイル検索に失敗しました: \(message)"
         }
     }
 }
@@ -33,7 +39,11 @@ nonisolated struct ProjectFileSnapshot: Equatable, Sendable {
 }
 
 struct ProjectFileService: Sendable {
-    nonisolated init() {}
+    private let searchExecutableURL: URL?
+
+    nonisolated init(searchExecutableURL: URL? = RipgrepExecutableResolver().bundledExecutableURL()) {
+        self.searchExecutableURL = searchExecutableURL
+    }
 
     nonisolated func loadDirectory(at url: URL) async throws -> [FileNode] {
         try await loadDirectory(at: url, projectRootURL: nil)
@@ -93,9 +103,22 @@ struct ProjectFileService: Sendable {
     }
 
     nonisolated func loadSearchEntries(at url: URL) async throws -> [ProjectFileSearchEntry] {
-        try await Task.detached(priority: .userInitiated) {
-            try Self.loadSearchEntriesSnapshot(at: url.standardizedFileURL)
-        }.value
+        guard let searchExecutableURL else {
+            throw ProjectFileError.fileSearchExecutableNotFound
+        }
+
+        let worker = Task.detached(priority: .userInitiated) {
+            try Self.loadSearchEntriesSnapshot(
+                at: url.standardizedFileURL,
+                executableURL: searchExecutableURL
+            )
+        }
+
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     nonisolated private static func loadDirectorySnapshot(at url: URL, projectRootURL: URL?) throws -> [FileNode] {
@@ -201,62 +224,41 @@ struct ProjectFileService: Sendable {
         }
     }
 
-    nonisolated private static func loadSearchEntriesSnapshot(at rootURL: URL) throws -> [ProjectFileSearchEntry] {
-        let fileManager = FileManager.default
-        let keys: [URLResourceKey] = [
-            .isDirectoryKey,
-            .isRegularFileKey
-        ]
-
+    nonisolated private static func loadSearchEntriesSnapshot(
+        at rootURL: URL,
+        executableURL: URL
+    ) throws -> [ProjectFileSearchEntry] {
         _ = try rootURL.resourceValues(forKeys: [.isDirectoryKey])
 
-        guard let enumerator = fileManager.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: keys,
-            options: []
-        ) else {
-            return []
-        }
+        let output = try RipgrepFileListRunner.run(
+            executableURL: executableURL,
+            currentDirectoryURL: rootURL
+        )
+        return searchEntries(fromNullSeparatedOutput: output, rootURL: rootURL)
+    }
 
-        var entries: [ProjectFileSearchEntry] = []
-        var gitIgnoreMatcher = GitIgnoreMatcher(rootURL: rootURL)
-
-        for case let fileURL as URL in enumerator {
-            let values = try fileURL.resourceValues(forKeys: Set(keys))
-            let name = fileURL.lastPathComponent
-            let isDirectory = values.isDirectory == true
-
-            if name == ".git" || name == ".ruri" {
-                if isDirectory {
-                    enumerator.skipDescendants()
+    nonisolated private static func searchEntries(
+        fromNullSeparatedOutput output: Data,
+        rootURL: URL
+    ) -> [ProjectFileSearchEntry] {
+        output
+            .split(separator: 0)
+            .compactMap { pathData -> ProjectFileSearchEntry? in
+                guard let relativePath = String(data: Data(pathData), encoding: .utf8),
+                      !relativePath.isEmpty else {
+                    return nil
                 }
 
-                continue
-            }
-
-            if gitIgnoreMatcher.isIgnored(fileURL, isDirectory: isDirectory) {
-                if isDirectory {
-                    enumerator.skipDescendants()
-                }
-
-                continue
-            }
-
-            guard values.isRegularFile == true else { continue }
-
-            entries.append(
-                ProjectFileSearchEntry(
-                    url: fileURL.standardizedFileURL,
-                    fileName: name,
-                    relativeParentPath: relativePath(
+                let fileURL = rootURL.appending(path: relativePath).standardizedFileURL
+                return ProjectFileSearchEntry(
+                    url: fileURL,
+                    fileName: fileURL.lastPathComponent,
+                    relativeParentPath: Self.relativePath(
                         from: rootURL,
                         to: fileURL.deletingLastPathComponent().standardizedFileURL
                     )
                 )
-            )
-        }
-
-        return entries
+            }
     }
 
     nonisolated private static func relativePath(from rootURL: URL, to targetURL: URL) -> String {
@@ -281,5 +283,118 @@ struct ProjectFileService: Sendable {
         }
 
         return path
+    }
+}
+
+nonisolated private enum RipgrepFileListRunner {
+    static func run(executableURL: URL, currentDirectoryURL: URL) throws -> Data {
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        let stdout = ProjectFileSearchLockedData()
+        let stderr = ProjectFileSearchLockedData()
+        let terminationSemaphore = DispatchSemaphore(value: 0)
+
+        process.executableURL = executableURL
+        process.arguments = [
+            "--files",
+            "--null",
+            "--hidden",
+            "--no-require-git",
+            "--glob",
+            "!.git/**",
+            "--glob",
+            "!.ruri/**"
+        ]
+        process.currentDirectoryURL = currentDirectoryURL
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "LC_ALL": "C",
+            "LANG": "C"
+        ]) { _, newValue in newValue }
+        process.terminationHandler = { _ in
+            terminationSemaphore.signal()
+        }
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                stdout.append(data)
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                stderr.append(data)
+            }
+        }
+
+        do {
+            try SafeProcessLauncher.run(process)
+        } catch {
+            cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
+            throw ProjectFileError.fileSearchExecutableNotFound
+        }
+
+        while terminationSemaphore.wait(timeout: .now() + 0.05) == .timedOut {
+            if Task.isCancelled {
+                process.terminate()
+                process.waitUntilExit()
+                cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
+                throw CancellationError()
+            }
+        }
+
+        cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
+        appendRemainingData(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe, stdout: stdout, stderr: stderr)
+
+        guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
+            let message = String(data: stderr.data(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw ProjectFileError.fileSearchFailed(message)
+        }
+
+        return stdout.data()
+    }
+
+    private static func cleanup(stdoutPipe: Pipe, stderrPipe: Pipe) {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+    }
+
+    private static func appendRemainingData(
+        stdoutPipe: Pipe,
+        stderrPipe: Pipe,
+        stdout: ProjectFileSearchLockedData,
+        stderr: ProjectFileSearchLockedData
+    ) {
+        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
+        if !remainingStdout.isEmpty {
+            stdout.append(remainingStdout)
+        }
+
+        let remainingStderr = stderrPipe.fileHandleForReading.availableData
+        if !remainingStderr.isEmpty {
+            stderr.append(remainingStderr)
+        }
+    }
+}
+
+nonisolated private final class ProjectFileSearchLockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedData = Data()
+
+    func append(_ data: Data) {
+        lock.lock()
+        storedData.append(data)
+        lock.unlock()
+    }
+
+    func data() -> Data {
+        lock.lock()
+        let data = storedData
+        lock.unlock()
+        return data
     }
 }

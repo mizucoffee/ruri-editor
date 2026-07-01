@@ -104,6 +104,7 @@
 				B21AEBAC2FD6D057008C4AEE /* Sources */,
 				B21AEBAD2FD6D057008C4AEE /* Frameworks */,
 				B21AEBAE2FD6D057008C4AEE /* Resources */,
+				B26000012FF2000000000001 /* Copy Bundled Tools */,
 			);
 			buildRules = (
 			);
@@ -207,6 +208,32 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		B26000012FF2000000000001 /* Copy Bundled Tools */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Ruri/Resources/Tools/java-symbol-resolver.jar",
+				"$(SRCROOT)/Ruri/Resources/Tools/rg",
+			);
+			name = "Copy Bundled Tools";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/java-symbol-resolver.jar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/rg",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n\ntools_source_dir=\"$SRCROOT/Ruri/Resources/Tools\"\ntools_destination_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Tools\"\n\nif [[ -d \"$tools_source_dir\" ]]; then\n  mkdir -p \"$tools_destination_dir\"\n  for tool in rg java-symbol-resolver.jar; do\n    if [[ -f \"$tools_source_dir/$tool\" ]]; then\n      cp \"$tools_source_dir/$tool\" \"$tools_destination_dir/$tool\"\n    fi\n  done\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B21AEBAC2FD6D057008C4AEE /* Sources */ = {
@@ -357,7 +384,7 @@
 		B21AEBBC2FD6D058008C4AEE /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = DevAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
@@ -383,6 +410,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Ruri/Ruri-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -417,6 +445,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "Ruri/Ruri-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -512,7 +541,7 @@
 			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
 			requirement = {
 				kind = revision;
-				revision = c2fe63d1a244e98a4fbadc7b77b93799ceb97389;
+				revision = 9adb62463d2264e7403feb7a1471aaf27eaab2f4;
 			};
 		};
 		B25000032FF000000000001 /* XCRemoteSwiftPackageReference "CodeEditLanguages" */ = {

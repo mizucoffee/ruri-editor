@@ -257,7 +257,13 @@ nonisolated private enum GitHubProcessCommandRunner {
             }
         }
 
-        try process.run()
+        do {
+            try SafeProcessLauncher.run(process)
+        } catch {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            throw error
+        }
         if let standardInput,
            let stdinPipe {
             stdinPipe.fileHandleForWriting.write(standardInput)

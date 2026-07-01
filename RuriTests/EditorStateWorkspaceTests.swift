@@ -1073,7 +1073,16 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "remote branch"], in: seedURL)
         try runGit(["push", "-u", "origin", "feature"], in: seedURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        try await WorktreeInitializationStore().save(
+            WorktreeInitializationDocument(initializationCommand: "npm install"),
+            metadataDirectoryURL: rootURL.appending(path: ".ruri", directoryHint: .isDirectory),
+            repositoryRootURL: rootURL
+        )
+        let initializationService = RecordingWorktreeInitializationService()
+        let editor = EditorState(
+            worktreeInitializationService: initializationService,
+            isFileWatchingEnabled: false
+        )
         await editor.openProject(rootURL)
         let request = ExternalPullRequestWorktreeCreationRequest(
             pullRequestNumber: 1,
@@ -1089,6 +1098,16 @@ final class EditorStateWorkspaceTests: XCTestCase {
         XCTAssertEqual(editor.activeProjectID, worktreeURL.standardizedFileURL)
         XCTAssertEqual(editor.editorMode, .review)
         XCTAssertTrue(fileManager.fileExists(atPath: worktreeURL.appending(path: "RemoteBranch.txt").path(percentEncoded: false)))
+        XCTAssertEqual(initializationService.calls(), [
+            RecordingWorktreeInitializationService.Call(
+                command: "npm install",
+                worktreeRootURL: worktreeURL.standardizedFileURL
+            )
+        ])
+        XCTAssertEqual(
+            try String(contentsOf: worktreeURL.appending(path: "initialized.txt"), encoding: .utf8),
+            "npm install\n"
+        )
     }
 
     func testContentChangeRefreshesOnlyChangedWorktreeGitState() async throws {
@@ -1289,10 +1308,10 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: baseURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
 
-        let definitionURL = worktreeURL.appending(path: "Definition.kt")
-        let usageURL = worktreeURL.appending(path: "Usage.kt")
-        let definitionText = "class Target\n"
-        let usageText = "fun main() { Target() }\n"
+        let definitionURL = worktreeURL.appending(path: "Definition.java")
+        let usageURL = worktreeURL.appending(path: "Usage.java")
+        let definitionText = "class Target {}\n"
+        let usageText = "class Usage { Target target; }\n"
         try definitionText.write(to: definitionURL, atomically: true, encoding: .utf8)
         try usageText.write(to: usageURL, atomically: true, encoding: .utf8)
 
@@ -1325,8 +1344,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             mergeBaseRevision: "abc123",
             files: [
                 GitReviewFileDiff(diff: SourceFileDiff(
-                    oldRelativePath: "Usage.kt",
-                    newRelativePath: "Usage.kt",
+                    oldRelativePath: "Usage.java",
+                    newRelativePath: "Usage.java",
                     hunks: [
                         SourceDiffHunk(
                             oldStart: 1,
@@ -1404,11 +1423,11 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: baseURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
 
-        let definitionURL = worktreeURL.appending(path: "Definition.kt")
-        let usageURL = worktreeURL.appending(path: "Usage.kt")
-        let definitionText = "class Target\n"
-        let oldUsageText = "fun main() { Target() }\n"
-        let currentUsageText = "fun main() { CurrentOnly() }\n"
+        let definitionURL = worktreeURL.appending(path: "Definition.java")
+        let usageURL = worktreeURL.appending(path: "Usage.java")
+        let definitionText = "class Target {}\n"
+        let oldUsageText = "class Usage { Target target; }\n"
+        let currentUsageText = "class Usage { CurrentOnly current; }\n"
         try definitionText.write(to: definitionURL, atomically: true, encoding: .utf8)
         try currentUsageText.write(to: usageURL, atomically: true, encoding: .utf8)
 
@@ -1441,8 +1460,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             mergeBaseRevision: "abc123",
             files: [
                 GitReviewFileDiff(diff: SourceFileDiff(
-                    oldRelativePath: "Usage.kt",
-                    newRelativePath: "Usage.kt",
+                    oldRelativePath: "Usage.java",
+                    newRelativePath: "Usage.java",
                     hunks: [
                         SourceDiffHunk(
                             oldStart: 1,
@@ -1480,7 +1499,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 fileContentsByRootAndRevision: [
                     worktreeURL.standardizedFileURL: [
                         "abc123": [
-                            "Usage.kt": oldUsageText
+                            "Usage.java": oldUsageText
                         ]
                     ]
                 ]
@@ -1699,7 +1718,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
 
         await editor.openProject(rootURL)
         let workspaceID = try await editor.createWorktree(named: "feature-one")
-        try await editor.initializeWorktree(workspaceID, command: "npm install")
+        try await editor.initializeCreatedWorktree(workspaceID, command: "npm install")
 
         XCTAssertEqual(initializationService.calls(), [
             RecordingWorktreeInitializationService.Call(
@@ -1737,7 +1756,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let workspaceID = try await editor.createWorktree(named: "feature-one")
 
         do {
-            try await editor.initializeWorktree(workspaceID, command: "npm install")
+            try await editor.initializeCreatedWorktree(workspaceID, command: "npm install")
             XCTFail("Expected initialization to fail.")
         } catch WorktreeInitializationError.processFailed(let message) {
             XCTAssertEqual(message, "boom")
@@ -2152,12 +2171,12 @@ final class EditorStateWorkspaceTests: XCTestCase {
         defer { try? fileManager.removeItem(at: rootURL) }
 
         try "".write(to: rootURL.appending(path: "settings.gradle.kts"), atomically: true, encoding: .utf8)
-        let sourceDirectoryURL = rootURL.appending(path: "src/main/kotlin", directoryHint: .isDirectory)
+        let sourceDirectoryURL = rootURL.appending(path: "src/main/java", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: sourceDirectoryURL, withIntermediateDirectories: true)
 
-        let sourceURL = sourceDirectoryURL.appending(path: "Source.kt")
-        let targetURL = sourceDirectoryURL.appending(path: "Target.kt")
-        let sourceText = "fun main() {\n    Target().run()\n}\n"
+        let sourceURL = sourceDirectoryURL.appending(path: "Source.java")
+        let targetURL = sourceDirectoryURL.appending(path: "Target.java")
+        let sourceText = "class Source {\n    Target target;\n}\n"
         let targetText = "class Target {}\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try targetText.write(to: targetURL, atomically: true, encoding: .utf8)
@@ -2213,24 +2232,19 @@ final class EditorStateWorkspaceTests: XCTestCase {
         XCTAssertTrue(NSEqualRanges(forwardSession.selectedRange, targetRange))
     }
 
-    func testContextualCodeNavigationBuildsUsagesFromUnsavedOpenDocumentText() async throws {
+    func testContextualCodeNavigationNavigatesWhenDefinitionHasSingleReference() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
 
         try "".write(to: rootURL.appending(path: "settings.gradle.kts"), atomically: true, encoding: .utf8)
-        let sourceDirectoryURL = rootURL.appending(path: "src/main/kotlin", directoryHint: .isDirectory)
+        let sourceDirectoryURL = rootURL.appending(path: "src/main/java", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: sourceDirectoryURL, withIntermediateDirectories: true)
 
-        let sourceURL = sourceDirectoryURL.appending(path: "Source.kt")
-        let savedText = "class Target\nfun main() { Target() }\n"
-        let unsavedText = "class Target\nfun main() { Target().edited() }\n"
+        let sourceURL = sourceDirectoryURL.appending(path: "Source.java")
+        let savedText = "class Target {}\nclass Source { Target target; }\n"
+        let unsavedText = "class Target {}\nclass Source { Target editedTarget; }\n"
         try savedText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let usageRange = (unsavedText as NSString).range(
-            of: "Target",
-            options: [],
-            range: NSRange(location: 7, length: (unsavedText as NSString).length - 7)
-        )
         let editor = EditorState(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
@@ -2240,28 +2254,29 @@ final class EditorStateWorkspaceTests: XCTestCase {
         editor.updateText(unsavedText, in: sourceTabID)
 
         let navigationResult = await editor.resolveImplementationOrReferences(at: 6, in: sourceTabID)
-        let result = try XCTUnwrap(navigationResult)
-
-        guard case .references(let usages, let title) = result else {
-            return XCTFail("Expected usage references")
+        guard case .navigated(let closedDocument) = navigationResult else {
+            return XCTFail("Expected single reference definition click to navigate directly.")
         }
 
-        XCTAssertEqual(title, "Usages")
-        XCTAssertEqual(usages.count, 1)
-        XCTAssertEqual(usages[0].lineText, "fun main() { Target().edited() }")
-        XCTAssertEqual(usages[0].lineNumber, 2)
-        XCTAssertEqual(usages[0].column, 14)
-        XCTAssertTrue(NSEqualRanges(usages[0].matchRange.nsRange, usageRange))
+        XCTAssertNil(closedDocument)
+        let selectedTabID = try XCTUnwrap(editor.selectedTabID)
+        let selectedTab = try XCTUnwrap(editor.tab(for: selectedTabID))
+        XCTAssertTrue(FileURLRewriter.urlsMatch(selectedTab.url, sourceURL))
+
+        let session = try XCTUnwrap(editor.editorSession(for: selectedTabID))
+        let usageRange = (unsavedText as NSString).range(of: "Target editedTarget")
+        XCTAssertTrue(NSEqualRanges(session.selectedRange, NSRange(location: usageRange.location, length: 6)))
+        XCTAssertNotNil(session.pendingSelectionRevealID)
     }
 
     func testCodeUsageJumpPreservesSourceTabAndRecordsHistory() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let sourceURL = rootURL.appending(path: "Definition.kt")
-        let usageURL = rootURL.appending(path: "Usage.kt")
-        let sourceText = "class Target\n"
-        let usageText = "fun main() { Target() }\n"
+        let sourceURL = rootURL.appending(path: "Definition.java")
+        let usageURL = rootURL.appending(path: "Usage.java")
+        let sourceText = "class Target {}\n"
+        let usageText = "class Usage { Target target; }\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try usageText.write(to: usageURL, atomically: true, encoding: .utf8)
 
@@ -2271,7 +2286,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let sourceTabID = try XCTUnwrap(editor.selectedTabID)
         editor.updateSelection(NSRange(location: 6, length: 0), in: sourceTabID)
 
-        let usageRange = TextRange(location: 13, length: 6)
+        let usageRange = TextRange(location: (usageText as NSString).range(of: "Target").location, length: 6)
         let usage = CodeUsageResult.result(
             url: usageURL,
             range: usageRange,
@@ -2529,50 +2544,16 @@ final class EditorStateWorkspaceTests: XCTestCase {
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 
     private func initializeRepository(at rootURL: URL) throws {
-        try runGit(["init", "-b", "main"], in: rootURL)
-        try runGit(["config", "user.email", "test@example.com"], in: rootURL)
-        try runGit(["config", "user.name", "Test"], in: rootURL)
+        try TestSupport.initializeRepository(at: rootURL, fileManager: fileManager)
     }
 
     @discardableResult
     private func runGit(_ arguments: [String], in rootURL: URL) throws -> String {
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.executableURL = try gitExecutableURL()
-        process.arguments = arguments
-        process.currentDirectoryURL = rootURL
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-        guard process.terminationStatus == 0 else {
-            let message = String(data: error, encoding: .utf8) ?? "git failed"
-            XCTFail(message)
-            return ""
-        }
-
-        return String(data: output, encoding: .utf8) ?? ""
-    }
-
-    private func gitExecutableURL() throws -> URL {
-        let url = URL(filePath: "/usr/bin/git")
-        guard fileManager.isExecutableFile(atPath: url.path(percentEncoded: false)) else {
-            throw XCTSkip("git executable is not available")
-        }
-
-        return url
+        try TestSupport.runGit(arguments, in: rootURL, fileManager: fileManager)
     }
 
     private func waitForSymbolIndexReady(

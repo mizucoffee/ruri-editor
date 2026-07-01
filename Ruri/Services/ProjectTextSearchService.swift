@@ -88,6 +88,7 @@ struct ProjectTextSearchService {
             "--column",
             "--with-filename",
             "--hidden",
+            "--no-require-git",
             "--no-heading",
             "--max-count",
             "\(resultLimit)",
@@ -348,7 +349,7 @@ nonisolated private enum RipgrepCommandRunner {
         }
 
         do {
-            try process.run()
+            try SafeProcessLauncher.run(process)
         } catch {
             cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
             throw ProjectTextSearchError.searchExecutableNotFound

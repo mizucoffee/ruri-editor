@@ -92,6 +92,14 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textView.window?.firstResponder === textView
     }
 
+    func notifyTextViewFocused() {
+        delegate?.editorDocumentRuntimeDidFocusTextView(self)
+    }
+
+    func notifyTextViewBlurred() {
+        delegate?.editorDocumentRuntimeDidBlurTextView(self)
+    }
+
     func activate(focusesTextView: Bool) {
         refreshSyntaxHighlightingIfNeeded()
         restoreSelection()
@@ -129,9 +137,9 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textView.runtime = nil
     }
 
-    func syncExternalTextIfNeeded(_ text: String) {
+    func syncExternalTextIfNeeded(_ text: String, allowsFirstResponderUpdate: Bool = false) {
         guard textView.string != text,
-              textView.window?.firstResponder !== textView,
+              allowsFirstResponderUpdate || textView.window?.firstResponder !== textView,
               !textView.hasMarkedText() else {
             return
         }

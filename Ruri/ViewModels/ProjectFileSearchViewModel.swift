@@ -134,7 +134,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
         if indexesByProjectURL[standardizedURL] != nil {
             isIndexing = false
             refreshIndexStatus()
-            startSearch(debounce: false)
+            startSearch()
             return
         }
 
@@ -172,7 +172,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
         isIndexing = false
         errorMessage = nil
         refreshIndexStatus()
-        startSearch(debounce: false)
+        startSearch()
     }
 
     private func failIndexing(_ error: Error, for projectURL: URL) {
@@ -214,10 +214,10 @@ final class ProjectFileSearchViewModel: ObservableObject {
     }
 
     private func scheduleSearch() {
-        startSearch(debounce: true)
+        startSearch()
     }
 
-    private func startSearch(debounce: Bool) {
+    private func startSearch() {
         searchTask?.cancel()
 
         guard isPresented else { return }
@@ -230,10 +230,6 @@ final class ProjectFileSearchViewModel: ObservableObject {
 
         let query = query
         searchTask = Task.detached(priority: .userInitiated) { [weak self, activeProjectURL, index, query] in
-            if debounce {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-            }
-
             guard !Task.isCancelled else { return }
             let results = index.search(matching: query) {
                 Task.isCancelled

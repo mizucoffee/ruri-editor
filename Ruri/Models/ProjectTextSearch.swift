@@ -5,7 +5,7 @@
 
 import Foundation
 
-nonisolated struct TextRange: Equatable, Hashable, Sendable {
+nonisolated struct TextRange: Equatable, Hashable, Sendable, Codable {
     let location: Int
     let length: Int
 

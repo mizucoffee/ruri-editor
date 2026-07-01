@@ -31,15 +31,18 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     private let shellResolver: TerminalShellResolver
     private let agentStatusStore: any CodingAgentStatusStoring
     private let agentStatusNotifier: any CodingAgentStatusNotifying
+    private var openFileRequest: (TerminalFileOpenRequest) -> Void
 
     init(
         shellResolver: TerminalShellResolver? = nil,
         agentStatusStore: any CodingAgentStatusStoring = CodingAgentStatusStore(),
-        agentStatusNotifier: any CodingAgentStatusNotifying = CodingAgentStatusNotifier()
+        agentStatusNotifier: any CodingAgentStatusNotifying = CodingAgentStatusNotifier(),
+        openFileRequest: @escaping (TerminalFileOpenRequest) -> Void = { _ in }
     ) {
         self.shellResolver = shellResolver ?? TerminalShellResolver()
         self.agentStatusStore = agentStatusStore
         self.agentStatusNotifier = agentStatusNotifier
+        self.openFileRequest = openFileRequest
     }
 
     deinit {
@@ -70,6 +73,10 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     var selectedTab: TerminalTabSnapshot? {
         guard let selectedTabID else { return nil }
         return tabs.first { $0.id == selectedTabID }
+    }
+
+    func setOpenFileRequestHandler(_ handler: @escaping (TerminalFileOpenRequest) -> Void) {
+        openFileRequest = handler
     }
 
     var closeConfirmationMessage: String? {
@@ -221,6 +228,14 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         publishWorkspaceSnapshots()
     }
 
+    func workspaceID(containing tabID: TerminalTab.ID) -> ProjectWorkspaceSnapshot.ID? {
+        for workspace in workspaces.values where workspace.tab(for: tabID) != nil {
+            return workspace.id
+        }
+
+        return nil
+    }
+
     func removeWorkspace(id: ProjectWorkspaceSnapshot.ID) {
         let wasActiveWorkspace = activeWorkspaceID == id
         guard let workspace = workspaces.removeValue(forKey: id) else {
@@ -355,6 +370,11 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     func terminalRuntimeDidRequestCloseTab(_ runtime: TerminalRuntime) {
         guard runtime.workspaceID == activeWorkspaceID else { return }
         requestCloseTab(runtime.tabID)
+    }
+
+    func terminalRuntime(_ runtime: TerminalRuntime, didRequestOpenFile request: TerminalFileOpenRequest) {
+        guard runtime.workspaceID == activeWorkspaceID else { return }
+        openFileRequest(request)
     }
 
     private func ensureRuntime(

@@ -76,6 +76,8 @@ struct ProjectTextSearchService {
         )
     }
 
+    // ignore判定はrgのネイティブ解釈に委ねる（`--no-ignore` を渡さない）。ファイルツリー表示側の
+    // ノード単位判定は GitIgnoreMatcher が担う（役割分担は GitIgnoreMatcher.swift 冒頭を参照）。
     nonisolated private static func ripgrepArguments(
         query: String,
         options: ProjectTextSearchOptions,
@@ -183,7 +185,7 @@ struct ProjectTextSearchService {
         }
 
         let standardizedURL = candidateURL.standardizedFileURL
-        guard isDescendantOrSame(standardizedURL, of: projectURL) else {
+        guard FileURLRewriter.isDescendantOrSame(standardizedURL, of: projectURL) else {
             throw ProjectTextSearchError.invalidDirectory(directoryPath)
         }
 
@@ -202,38 +204,11 @@ struct ProjectTextSearchService {
     }
 
     nonisolated private static func relativeSearchPath(from projectURL: URL, to searchRootURL: URL) -> String {
-        let relativePath = relativePath(from: projectURL, to: searchRootURL)
-        return relativePath.isEmpty ? "." : relativePath
-    }
-
-    nonisolated static func relativePath(from rootURL: URL, to targetURL: URL) -> String {
-        let rootPath = normalizedDirectoryPath(rootURL)
-        let targetPath = targetURL.standardizedFileURL.path(percentEncoded: false)
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-
-        guard targetPath.hasPrefix(rootPrefix) else {
-            return targetURL.lastPathComponent
+        guard let relativePath = FileURLRewriter.relativePath(from: projectURL, to: searchRootURL),
+              !relativePath.isEmpty else {
+            return "."
         }
-
-        return String(targetPath.dropFirst(rootPrefix.count))
-    }
-
-    nonisolated private static func isDescendantOrSame(_ candidateURL: URL, of rootURL: URL) -> Bool {
-        let rootPath = normalizedDirectoryPath(rootURL)
-        let candidatePath = normalizedDirectoryPath(candidateURL)
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-
-        return candidatePath == rootPath || candidatePath.hasPrefix(rootPrefix)
-    }
-
-    nonisolated private static func normalizedDirectoryPath(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
-        }
-
-        return path
+        return relativePath
     }
 }
 
@@ -332,18 +307,26 @@ nonisolated private enum RipgrepCommandRunner {
             terminationSemaphore.signal()
         }
 
+        let stdoutEOFSemaphore = DispatchSemaphore(value: 0)
+        let stderrEOFSemaphore = DispatchSemaphore(value: 0)
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
-                let shouldTerminate = stdout.append(data)
-                if shouldTerminate, process.isRunning {
-                    process.terminate()
-                }
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutEOFSemaphore.signal()
+                return
+            }
+            let shouldTerminate = stdout.append(data)
+            if shouldTerminate, process.isRunning {
+                process.terminate()
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrEOFSemaphore.signal()
+            } else {
                 stderr.append(data)
             }
         }
@@ -357,15 +340,17 @@ nonisolated private enum RipgrepCommandRunner {
 
         while terminationSemaphore.wait(timeout: .now() + 0.05) == .timedOut {
             if Task.isCancelled {
-                process.terminate()
-                process.waitUntilExit()
+                SafeProcessLauncher.terminateWithEscalation(process)
                 cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
                 throw CancellationError()
             }
         }
 
+        // 終了直前のバースト出力をハンドラがEOFまで読み切るのを待ってから結果を確定する。
+        // 孫プロセスがpipeを保持し続ける場合に備えて待ちは有限にする。
+        _ = stdoutEOFSemaphore.wait(timeout: .now() + 2)
+        _ = stderrEOFSemaphore.wait(timeout: .now() + 2)
         cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
-        appendRemainingData(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe, stdout: stdout, stderr: stderr)
 
         return RipgrepCommandResult(
             stdout: stdout.data(),
@@ -378,22 +363,6 @@ nonisolated private enum RipgrepCommandRunner {
     private static func cleanup(stdoutPipe: Pipe, stderrPipe: Pipe) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-    }
-
-    private static func appendRemainingData(
-        stdoutPipe: Pipe,
-        stderrPipe: Pipe,
-        stdout: RipgrepLimitedOutput,
-        stderr: RipgrepLockedData
-    ) {
-        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
-        if !remainingStdout.isEmpty {
-            _ = stdout.append(remainingStdout)
-        }
-        let remainingStderr = stderrPipe.fileHandleForReading.availableData
-        if !remainingStderr.isEmpty {
-            stderr.append(remainingStderr)
-        }
     }
 }
 
@@ -567,7 +536,9 @@ nonisolated private struct RipgrepJSONOutputParser {
 
         let absolutePath = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
         if path.hasPrefix("/") {
-            return ProjectTextSearchService.relativePath(from: projectURL, to: URL(filePath: absolutePath))
+            let absoluteURL = URL(filePath: absolutePath)
+            return FileURLRewriter.relativePath(from: projectURL, to: absoluteURL)
+                ?? absoluteURL.lastPathComponent
         }
 
         var relativePath = path

@@ -51,7 +51,7 @@ nonisolated struct JavaSymbolResolverRequest: Equatable, Sendable, Codable {
         case hover
     }
 
-    struct OpenDocument: Equatable, Sendable, Codable {
+    struct Document: Equatable, Sendable, Codable {
         let path: String
         let text: String
     }
@@ -61,7 +61,7 @@ nonisolated struct JavaSymbolResolverRequest: Equatable, Sendable, Codable {
     let filePath: String
     let text: String
     let utf16Offset: Int
-    let openDocuments: [OpenDocument]
+    let openDocuments: [Document]
     let sourceRoots: [String]
     let sourceFiles: [String]
     let classpath: [String]
@@ -342,7 +342,7 @@ final class SymbolNavigationService {
         let javaOpenDocuments = openDocuments
             .filter { Self.isJavaFile($0.url) }
             .map {
-                JavaSymbolResolverRequest.OpenDocument(
+                JavaSymbolResolverRequest.Document(
                     path: $0.url.standardizedFileURL.path(percentEncoded: false),
                     text: $0.text
                 )
@@ -502,12 +502,11 @@ private actor JavaSymbolWorkspaceWorker {
     }
 
     private func conventionalSourceRoot(for fileURL: URL, projectURL: URL) -> URL? {
-        let projectPath = projectURL.standardizedFileURL.path(percentEncoded: false)
-        let filePath = fileURL.standardizedFileURL.path(percentEncoded: false)
-        let prefix = projectPath.hasSuffix("/") ? projectPath : "\(projectPath)/"
-        guard filePath.hasPrefix(prefix) else { return nil }
+        guard let relativePath = FileURLRewriter.relativePath(from: projectURL, to: fileURL),
+              !relativePath.isEmpty else {
+            return nil
+        }
 
-        let relativePath = String(filePath.dropFirst(prefix.count))
         let components = relativePath.split(separator: "/").map(String.init)
         guard let srcIndex = components.firstIndex(of: "src") else { return nil }
         for index in (srcIndex + 1)..<components.count where components[index] == "java" {

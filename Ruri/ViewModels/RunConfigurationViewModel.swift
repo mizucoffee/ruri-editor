@@ -1,5 +1,5 @@
 //
-//  RunConfigurationState.swift
+//  RunConfigurationViewModel.swift
 //  ruri
 //
 
@@ -7,7 +7,7 @@ import Combine
 import Foundation
 
 @MainActor
-final class RunConfigurationState: ObservableObject {
+final class RunConfigurationViewModel: ObservableObject {
     @Published private(set) var configurations: [RunConfiguration] = []
     @Published private(set) var activeConfigurationID: RunConfiguration.ID?
     @Published private(set) var currentError: EditorError?

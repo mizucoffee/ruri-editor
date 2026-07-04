@@ -340,7 +340,9 @@ final class EditorRuntimeStoreTests: XCTestCase {
         let textView = try textView(from: runtime)
 
         runtime.jumpToLine(3)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        pumpMainRunLoop("diff marker line selection") {
+            textView.selectedRange() == NSRange(location: 8, length: 0)
+        }
 
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 8, length: 0))
     }
@@ -383,7 +385,9 @@ final class EditorRuntimeStoreTests: XCTestCase {
         XCTAssertLessThan(initialHorizontalOrigin, 0)
 
         runtime.activate(focusesTextView: false)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        pumpMainRunLoop("line number ruler horizontal inset restoration") {
+            runtime.scrollView.contentView.bounds.origin.x == initialHorizontalOrigin
+        }
 
         XCTAssertEqual(runtime.scrollView.contentView.bounds.origin.x, initialHorizontalOrigin)
     }
@@ -413,7 +417,9 @@ final class EditorRuntimeStoreTests: XCTestCase {
         XCTAssertEqual(runtime.scrollView.contentView.bounds.origin.x, 200)
 
         runtime.updateLineWrappingMode(.wrapped)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        pumpMainRunLoop("wrapped layout restoration") {
+            runtime.scrollView.contentView.bounds.origin.x < 0 && textView.frame.width < 1_000_000
+        }
 
         XCTAssertFalse(runtime.scrollView.hasHorizontalScroller)
         XCTAssertTrue(runtime.scrollView.horizontalScroller?.isHidden ?? true)
@@ -1213,16 +1219,35 @@ final class EditorRuntimeStoreTests: XCTestCase {
         return colors
     }
 
+    private func pumpMainRunLoop(timeout: TimeInterval, until condition: () throws -> Bool) rethrows {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while try !condition(), Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+    }
+
+    private func pumpMainRunLoop(
+        _ description: String,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        until condition: () -> Bool
+    ) {
+        pumpMainRunLoop(timeout: timeout, until: condition)
+        if !condition() {
+            XCTFail("Timed out waiting for \(description).", file: file, line: line)
+        }
+    }
+
     private func waitForForegroundColorDescriptions(
         in textStorage: NSTextStorage,
         minimumCount: Int,
         timeout: TimeInterval = 5
     ) throws -> Set<String> {
-        let deadline = Date(timeIntervalSinceNow: timeout)
         var colors = foregroundColorDescriptions(in: textStorage)
-        while colors.count < minimumCount, Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        pumpMainRunLoop(timeout: timeout) {
             colors = foregroundColorDescriptions(in: textStorage)
+            return colors.count >= minimumCount
         }
         return colors
     }
@@ -1233,11 +1258,10 @@ final class EditorRuntimeStoreTests: XCTestCase {
         minimumCount: Int,
         timeout: TimeInterval = 5
     ) throws -> Set<String> {
-        let deadline = Date(timeIntervalSinceNow: timeout)
         var colors = try foregroundColorDescriptions(for: needles, in: textStorage)
-        while colors.count < minimumCount, Date() < deadline {
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        try pumpMainRunLoop(timeout: timeout) {
             colors = try foregroundColorDescriptions(for: needles, in: textStorage)
+            return colors.count >= minimumCount
         }
         return colors
     }

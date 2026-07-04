@@ -1,5 +1,5 @@
 //
-//  WorktreeInitializationState.swift
+//  WorktreeInitializationViewModel.swift
 //  ruri
 //
 
@@ -7,7 +7,7 @@ import Combine
 import Foundation
 
 @MainActor
-final class WorktreeInitializationState: ObservableObject {
+final class WorktreeInitializationViewModel: ObservableObject {
     @Published private(set) var command = ""
     @Published private(set) var currentError: EditorError?
 

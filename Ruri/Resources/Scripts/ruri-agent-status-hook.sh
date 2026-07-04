@@ -24,11 +24,17 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
 
+payload=""
+if [ ! -t 0 ]; then
+  payload=$(cat 2>/dev/null || true)
+fi
+
 mkdir -p "$RURI_AGENT_STATUS_DIR" 2>/dev/null || exit 0
 
 export RURI_AGENT_PROVIDER="$provider"
 export RURI_AGENT_STATE="$state"
 export RURI_AGENT_EVENT="$event"
+export RURI_AGENT_HOOK_PAYLOAD="$payload"
 
 python3 - <<'PY'
 import datetime
@@ -42,6 +48,39 @@ status_dir = os.environ.get("RURI_AGENT_STATUS_DIR", "")
 
 if not re.fullmatch(r"[0-9A-Fa-f-]{36}", terminal_id) or not status_dir:
     raise SystemExit(0)
+
+try:
+    hook_payload = json.loads(os.environ.get("RURI_AGENT_HOOK_PAYLOAD", ""))
+except ValueError:
+    hook_payload = {}
+if not isinstance(hook_payload, dict):
+    hook_payload = {}
+
+# Status files must track the main agent only: Claude Code re-fires configured
+# Stop hooks as SubagentStop whenever a subagent finishes, which would otherwise
+# spam "completed" notifications. Subagent permission waits still need the user,
+# so "waiting" passes through.
+is_subagent_context = (
+    bool(hook_payload.get("agent_id"))
+    or hook_payload.get("hook_event_name") == "SubagentStop"
+)
+if is_subagent_context and os.environ.get("RURI_AGENT_STATE") != "waiting":
+    raise SystemExit(0)
+
+# A main-agent Stop that leaves background subagents running is not a real
+# completion; the session resumes when they finish and a later Stop reports
+# background_tasks empty. Background shells are excluded: persistent ones
+# (e.g. dev servers) never exit, which would suppress completion forever.
+if not is_subagent_context and os.environ.get("RURI_AGENT_STATE") == "completed":
+    background_tasks = hook_payload.get("background_tasks")
+    has_running_subagent = isinstance(background_tasks, list) and any(
+        isinstance(task, dict)
+        and task.get("type") == "subagent"
+        and task.get("status") == "running"
+        for task in background_tasks
+    )
+    if has_running_subagent:
+        raise SystemExit(0)
 
 document = {
     "version": 1,

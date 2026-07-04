@@ -38,8 +38,14 @@ public final class Main {
             return gson.toJson(new ResponseEnvelope(id, response, null));
         } catch (JsonSyntaxException error) {
             return gson.toJson(new ResponseEnvelope(id, null, "Invalid request JSON: " + error.getMessage()));
-        } catch (Exception error) {
-            return gson.toJson(new ResponseEnvelope(id, null, error.getMessage()));
+        } catch (Throwable error) {
+            // StackOverflowError/OutOfMemoryErrorなどのErrorでもJVMを落とさず、
+            // 1要求分のエラー応答として返す(プロセスが死ぬと全pending要求が失敗する)。
+            String message = error.getMessage();
+            if (message == null || message.isBlank()) {
+                message = error.getClass().getSimpleName();
+            }
+            return gson.toJson(new ResponseEnvelope(id, null, message));
         }
     }
 

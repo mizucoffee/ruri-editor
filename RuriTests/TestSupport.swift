@@ -7,6 +7,34 @@ import Foundation
 import XCTest
 
 enum TestSupport {
+    struct WaitTimeoutError: Error {}
+
+    static func waitUntil(
+        _ description: String,
+        timeout: Duration = .seconds(5),
+        pollInterval: Duration = .milliseconds(20),
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @MainActor () async throws -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while true {
+            if try await condition() {
+                return
+            }
+
+            guard clock.now < deadline else {
+                break
+            }
+
+            try await Task.sleep(for: pollInterval)
+        }
+
+        XCTFail("Timed out waiting for \(description).", file: file, line: line)
+        throw WaitTimeoutError()
+    }
+
     static func makeTemporaryDirectory(
         fileManager: FileManager = .default,
         file: StaticString = #filePath,

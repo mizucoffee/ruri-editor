@@ -5,16 +5,16 @@
 
 import Foundation
 
+// 手書きのgitignore評価器（ネストした .gitignore・`!` 否定・glob対応）。プロセス起動なしにノード単位で
+// 同期判定したい用途専用: ファイルツリーのグレーアウト（ProjectFileService.loadDirectorySnapshot）と
+// Javaソース列挙（SymbolNavigationService）。検索系（ProjectTextSearchService と ProjectFileService の
+// RipgrepFileListRunner）のignore判定は同梱rgのネイティブ解釈に委ねる。2系統は用途が異なる意図的な分離であり、統合しない。
 struct GitIgnoreMatcher {
     private let rootURL: URL
-    private let rootPath: String
     private var rulesByBasePath: [String: [GitIgnoreRule]] = [:]
 
     nonisolated init(rootURL: URL) {
-        let standardizedRootURL = rootURL.standardizedFileURL
-
-        self.rootURL = standardizedRootURL
-        self.rootPath = Self.normalizedDirectoryPath(standardizedRootURL)
+        self.rootURL = rootURL.standardizedFileURL
     }
 
     nonisolated mutating func isIgnored(_ url: URL, isDirectory: Bool) -> Bool {
@@ -83,25 +83,13 @@ struct GitIgnoreMatcher {
     }
 
     nonisolated private func relativePathComponents(for url: URL) -> [String] {
-        let targetPath = url.standardizedFileURL.path(percentEncoded: false)
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-
-        guard targetPath.hasPrefix(rootPrefix) else { return [] }
-
-        return targetPath
-            .dropFirst(rootPrefix.count)
-            .split(separator: "/")
-            .map(String.init)
-    }
-
-    nonisolated private static func normalizedDirectoryPath(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
+        guard let relativePath = FileURLRewriter.relativePath(from: rootURL, to: url) else {
+            return []
         }
 
-        return path
+        return relativePath
+            .split(separator: "/")
+            .map(String.init)
     }
 }
 

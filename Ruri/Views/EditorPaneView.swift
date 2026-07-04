@@ -7,7 +7,7 @@ import SwiftUI
 
 struct EditorPaneView: View {
     @ObservedObject var runtimeStore: EditorRuntimeStore
-    @ObservedObject var terminalState: TerminalState
+    @ObservedObject var terminalState: TerminalViewModel
     @State private var reviewDiffDisplayMode = ReviewDiffDisplayMode.unified
     @State private var reviewDiffWrapLines = true
 
@@ -61,7 +61,7 @@ struct EditorPaneView: View {
 
     EditorPaneView(
         runtimeStore: EditorRuntimeStore(),
-        terminalState: TerminalState(),
+        terminalState: TerminalViewModel(),
         state: EditorPaneHostState(
             workspaceID: URL(filePath: "/tmp"),
             editorMode: .edit,

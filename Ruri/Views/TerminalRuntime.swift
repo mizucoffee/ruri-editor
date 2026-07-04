@@ -12,6 +12,7 @@ protocol TerminalRuntimeDelegate: AnyObject {
     func terminalRuntime(_ runtime: TerminalRuntime, didTerminateWithExitCode exitCode: Int32?)
     func terminalRuntimeDidRequestNewTab(_ runtime: TerminalRuntime)
     func terminalRuntimeDidRequestCloseTab(_ runtime: TerminalRuntime)
+    func terminalRuntime(_ runtime: TerminalRuntime, didRequestSelectTabAtShortcutNumber number: Int)
     func terminalRuntime(_ runtime: TerminalRuntime, didRequestOpenFile request: TerminalFileOpenRequest)
 }
 
@@ -171,6 +172,8 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
                 self.delegate?.terminalRuntimeDidRequestNewTab(self)
             case .closeTab:
                 self.delegate?.terminalRuntimeDidRequestCloseTab(self)
+            case .selectTab(let number):
+                self.delegate?.terminalRuntime(self, didRequestSelectTabAtShortcutNumber: number)
             case nil:
                 return event
             }
@@ -361,6 +364,7 @@ enum TerminalKeyCommandMatcher {
     enum TerminalShortcut: Equatable {
         case newTab
         case closeTab
+        case selectTab(Int)
     }
 
     static func terminalShortcut(
@@ -375,6 +379,10 @@ enum TerminalKeyCommandMatcher {
             return .newTab
         case "w":
             return .closeTab
+        case "0":
+            return .selectTab(0)
+        case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            return charactersIgnoringModifiers.flatMap(Int.init).map(TerminalShortcut.selectTab)
         default:
             return nil
         }
@@ -416,5 +424,26 @@ enum TerminalKeyCommandMatcher {
             charactersIgnoringModifiers: event.charactersIgnoringModifiers,
             modifierFlags: event.modifierFlags
         ) == .closeTab
+    }
+
+    static func tabShortcutNumber(
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Int? {
+        guard case .selectTab(let number) = terminalShortcut(
+            charactersIgnoringModifiers: charactersIgnoringModifiers,
+            modifierFlags: modifierFlags
+        ) else {
+            return nil
+        }
+
+        return number
+    }
+
+    static func tabShortcutNumber(_ event: NSEvent) -> Int? {
+        tabShortcutNumber(
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+            modifierFlags: event.modifierFlags
+        )
     }
 }

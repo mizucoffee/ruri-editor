@@ -11,20 +11,20 @@ final class RuriApplicationTerminationCoordinator {
 
     typealias QuitConfirmation = @MainActor () -> Bool
 
-    private var editors: [WeakTerminationEditorState] = []
+    private var editors: [WeakTerminationEditorViewModel] = []
     private let quitConfirmation: QuitConfirmation
 
     init(quitConfirmation: @escaping QuitConfirmation = RuriApplicationTerminationCoordinator.presentQuitConfirmation) {
         self.quitConfirmation = quitConfirmation
     }
 
-    func register(_ editor: EditorState) {
+    func register(_ editor: EditorViewModel) {
         pruneEditors()
         guard !editors.contains(where: { $0.editor === editor }) else { return }
-        editors.append(WeakTerminationEditorState(editor: editor))
+        editors.append(WeakTerminationEditorViewModel(editor: editor))
     }
 
-    func unregister(_ editor: EditorState) {
+    func unregister(_ editor: EditorViewModel) {
         editors.removeAll { $0.editor == nil || $0.editor === editor }
     }
 
@@ -57,10 +57,10 @@ final class RuriApplicationTerminationCoordinator {
     }
 }
 
-private final class WeakTerminationEditorState {
-    weak var editor: EditorState?
+private final class WeakTerminationEditorViewModel {
+    weak var editor: EditorViewModel?
 
-    init(editor: EditorState) {
+    init(editor: EditorViewModel) {
         self.editor = editor
     }
 }

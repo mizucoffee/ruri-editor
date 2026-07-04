@@ -79,4 +79,55 @@ final class TerminalKeyCommandMatcherTests: XCTestCase {
             )
         )
     }
+
+    func testCommandNumberMatchesTabShortcutNumber() {
+        XCTAssertEqual(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "1",
+                modifierFlags: .command
+            ),
+            1
+        )
+        XCTAssertEqual(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "9",
+                modifierFlags: .command
+            ),
+            9
+        )
+    }
+
+    func testCommandZeroMatchesLastTabShortcutNumber() {
+        XCTAssertEqual(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "0",
+                modifierFlags: .command
+            ),
+            0
+        )
+    }
+
+    func testModifiedCommandNumberDoesNotMatchTabShortcutNumber() {
+        XCTAssertNil(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "1",
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertNil(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "1",
+                modifierFlags: [.command, .option]
+            )
+        )
+    }
+
+    func testPlainNumberDoesNotMatchTabShortcutNumber() {
+        XCTAssertNil(
+            TerminalKeyCommandMatcher.tabShortcutNumber(
+                charactersIgnoringModifiers: "1",
+                modifierFlags: []
+            )
+        )
+    }
 }

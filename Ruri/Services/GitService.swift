@@ -5,6 +5,8 @@
 
 import Foundation
 
+// MARK: - Service Protocol
+
 nonisolated protocol GitServiceProtocol {
     func repositoryStatus(for openedRootURL: URL) async -> GitRepositoryStatus
     func fileSnapshot(for fileURL: URL, openedRootURL: URL) async -> GitFileSnapshot?
@@ -42,6 +44,8 @@ nonisolated protocol GitServiceProtocol {
         openedRootURL: URL
     ) async throws -> String
 }
+
+// MARK: - Protocol Convenience Overloads
 
 extension GitServiceProtocol {
     nonisolated func snapshot(for openedRootURL: URL) async -> GitRepositorySnapshot? {
@@ -110,6 +114,8 @@ extension GitServiceProtocol {
     }
 }
 
+// MARK: - GitService Implementation
+
 nonisolated struct GitService: GitServiceProtocol, Sendable {
     private static let maximumSyntheticDiffBytes = 1_000_000
 
@@ -123,6 +129,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         self.executableURL = executableURL
         self.commandTimeout = commandTimeout
     }
+
+    // MARK: - Repository Status & File Snapshot
 
     nonisolated func repositoryStatus(for openedRootURL: URL) async -> GitRepositoryStatus {
         guard let executableURL else {
@@ -217,7 +225,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
                 for: openedRootURL,
                 executableURL: executableURL
             )
-            guard let relativePath = Self.relativePath(for: fileURL, worktreeRootURL: metadata.worktreeRootURL) else {
+            guard let relativePath = FileURLRewriter.relativePath(from: metadata.worktreeRootURL, to: fileURL),
+                  !relativePath.isEmpty else {
                 return nil
             }
 
@@ -249,6 +258,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             return nil
         }
     }
+
+    // MARK: - Worktree & Branch Operations
 
     nonisolated func createWorktree(
         branchName: String,
@@ -298,7 +309,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             .appending(path: trimmedBranchName, directoryHint: .isDirectory)
             .standardizedFileURL
 
-        guard Self.isDescendantOrSame(worktreeURL, of: worktreeParentURL),
+        guard FileURLRewriter.isDescendantOrSame(worktreeURL, of: worktreeParentURL),
               !FileURLRewriter.urlsMatch(worktreeURL, worktreeParentURL) else {
             throw GitWorktreeCreationError.worktreePathOutsideParent(worktreeURL)
         }
@@ -481,7 +492,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             .appending(path: remoteBranch.branchName, directoryHint: .isDirectory)
             .standardizedFileURL
 
-        guard Self.isDescendantOrSame(worktreeURL, of: worktreeParentURL),
+        guard FileURLRewriter.isDescendantOrSame(worktreeURL, of: worktreeParentURL),
               !FileURLRewriter.urlsMatch(worktreeURL, worktreeParentURL) else {
             throw GitWorktreeCreationError.worktreePathOutsideParent(worktreeURL)
         }
@@ -637,6 +648,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }
     }
 
+    // MARK: - Pull, Remotes & Branch Switching
+
     nonisolated func pull(openedRootURL: URL) async throws {
         guard let executableURL else {
             throw GitPullError.gitUnavailable
@@ -778,6 +791,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }
     }
 
+    // MARK: - Review Diff
+
     nonisolated func reviewDiff(
         base: GitReviewDiffBase,
         options: GitReviewDiffOptions,
@@ -918,11 +933,14 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             throw GitReviewDiffError.notRepository(openedRootURL)
         }
 
-        let relativePaths = Set(fileURLs.compactMap { fileURL in
-            Self.relativePath(
-                for: fileURL.standardizedFileURL,
-                worktreeRootURL: metadata.worktreeRootURL
-            )
+        let relativePaths = Set(fileURLs.compactMap { fileURL -> String? in
+            guard let relativePath = FileURLRewriter.relativePath(
+                from: metadata.worktreeRootURL,
+                to: fileURL.standardizedFileURL
+            ), !relativePath.isEmpty else {
+                return nil
+            }
+            return relativePath
         })
 
         do {
@@ -1049,6 +1067,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }
     }
 
+    // MARK: - Review Diff Internals
+
     private nonisolated func reviewDiffArguments(
         baseRevision: String,
         options: GitReviewDiffOptions,
@@ -1140,6 +1160,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }
     }
 
+    // MARK: - File Contents
+
     nonisolated func fileContents(
         at revision: String,
         relativePath: String,
@@ -1189,6 +1211,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             throw GitReviewDiffError.gitCommandFailed(error.localizedDescription)
         }
     }
+
+    // MARK: - Repository Metadata & Branch Queries
 
     private nonisolated func repositoryMetadata(
         for openedRootURL: URL,
@@ -1349,6 +1373,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }
     }
 
+    // MARK: - Diff Execution Helpers
+
     private nonisolated func trackedDiffs(
         in worktreeRootURL: URL,
         openedRootURL: URL,
@@ -1368,7 +1394,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             let diffs = GitDiffOutputParser.parse(diffText)
             return Dictionary(uniqueKeysWithValues: diffs.compactMap { diff in
                 guard let url = Self.url(for: diff, worktreeRootURL: worktreeRootURL),
-                      Self.isDescendantOrSame(url, of: openedRootURL) else {
+                      FileURLRewriter.isDescendantOrSame(url, of: openedRootURL) else {
                     return nil
                 }
 
@@ -1432,6 +1458,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         }.value
     }
 
+    // MARK: - Review File Assembly
+
     private nonisolated static func reviewFiles(
         parsedDiffs: [SourceFileDiff],
         nameStatuses: [GitDiffNameStatusEntry],
@@ -1473,7 +1501,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             let key = reviewFileKey(oldPath: diff.oldRelativePath, newPath: diff.newRelativePath)
             guard !seenKeys.contains(key),
                   let url = url(for: diff, worktreeRootURL: worktreeRootURL),
-                  isDescendantOrSame(url, of: openedRootURL) else {
+                  FileURLRewriter.isDescendantOrSame(url, of: openedRootURL) else {
                 continue
             }
 
@@ -1527,7 +1555,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             return worktreeRootURL.appending(path: relativePath).standardizedFileURL
         }
         .contains { url in
-            isDescendantOrSame(url, of: openedRootURL)
+            FileURLRewriter.isDescendantOrSame(url, of: openedRootURL)
         }
     }
 
@@ -1578,6 +1606,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         )
     }
 
+    // MARK: - Path & Error Utilities
+
     private nonisolated static func lines(in text: String) -> [String] {
         guard !text.isEmpty else { return [] }
 
@@ -1603,36 +1633,12 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
     private nonisolated static func change(_ change: GitFileChange, belongsTo openedRootURL: URL) -> Bool {
         guard !isRuriMetadataRelativePath(change.relativePath) else { return false }
 
-        return isDescendantOrSame(change.url, of: openedRootURL)
-            || change.originalURL.map { isDescendantOrSame($0, of: openedRootURL) } == true
+        return FileURLRewriter.isDescendantOrSame(change.url, of: openedRootURL)
+            || change.originalURL.map { FileURLRewriter.isDescendantOrSame($0, of: openedRootURL) } == true
     }
 
     private nonisolated static func isRuriMetadataRelativePath(_ relativePath: String) -> Bool {
         relativePath == ".ruri" || relativePath.hasPrefix(".ruri/")
-    }
-
-    private nonisolated static func isDescendantOrSame(_ url: URL, of rootURL: URL) -> Bool {
-        let path = FileURLRewriter.normalizedPath(url)
-        let rootPath = FileURLRewriter.normalizedPath(rootURL)
-
-        if path == rootPath {
-            return true
-        }
-
-        let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-        return path.hasPrefix(rootPathPrefix)
-    }
-
-    private nonisolated static func relativePath(for url: URL, worktreeRootURL: URL) -> String? {
-        let path = FileURLRewriter.normalizedPath(url)
-        let rootPath = FileURLRewriter.normalizedPath(worktreeRootURL)
-        let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-
-        guard path.hasPrefix(rootPathPrefix) else {
-            return nil
-        }
-
-        return String(path.dropFirst(rootPathPrefix.count))
     }
 
     private nonisolated static func isRuriStyleWorktree(_ openedRootURL: URL) -> Bool {
@@ -1656,10 +1662,14 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
     }
 }
 
+// MARK: - Errors
+
 nonisolated private enum GitServiceError: Error {
     case notRepository
     case timedOut
 }
+
+// MARK: - Repository Metadata & Executable Resolution
 
 nonisolated private struct GitRepositoryMetadata: Sendable {
     let worktreeRootURL: URL
@@ -1700,6 +1710,8 @@ nonisolated private struct GitExecutableResolver {
     }
 }
 
+// MARK: - Command Execution
+
 nonisolated private struct GitCommandResult: Sendable {
     let stdout: Data
     let stderr: Data
@@ -1732,15 +1744,23 @@ nonisolated private enum GitCommandRunner {
             terminationSemaphore.signal()
         }
 
+        let stdoutEOFSemaphore = DispatchSemaphore(value: 0)
+        let stderrEOFSemaphore = DispatchSemaphore(value: 0)
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutEOFSemaphore.signal()
+            } else {
                 stdout.append(data)
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrEOFSemaphore.signal()
+            } else {
                 stderr.append(data)
             }
         }
@@ -1755,24 +1775,18 @@ nonisolated private enum GitCommandRunner {
 
         let timeoutResult = terminationSemaphore.wait(timeout: .now() + timeout)
         if timeoutResult == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
+            SafeProcessLauncher.terminateWithEscalation(process)
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             throw GitServiceError.timedOut
         }
 
+        // 終了直前のバースト出力をハンドラがEOFまで読み切るのを待ってから結果を確定する。
+        // 孫プロセスがpipeを保持し続ける場合に備えて待ちは有限にする。
+        _ = stdoutEOFSemaphore.wait(timeout: .now() + 2)
+        _ = stderrEOFSemaphore.wait(timeout: .now() + 2)
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
-        if !remainingStdout.isEmpty {
-            stdout.append(remainingStdout)
-        }
-        let remainingStderr = stderrPipe.fileHandleForReading.availableData
-        if !remainingStderr.isEmpty {
-            stderr.append(remainingStderr)
-        }
 
         return GitCommandResult(
             stdout: stdout.data(),
@@ -1800,10 +1814,14 @@ nonisolated private final class LockedData: @unchecked Sendable {
     }
 }
 
+// MARK: - Parsed Status Model
+
 nonisolated private struct ParsedGitStatus {
     let branch: GitBranchState
     let changes: [GitFileChange]
 }
+
+// MARK: - Worktree & Branch Output Parsers
 
 nonisolated private enum GitWorktreeListOutputParser {
     static func parse(_ output: String, gitCommonDirectoryURL: URL) -> [GitWorktreeInfo] {
@@ -1915,6 +1933,8 @@ nonisolated private enum GitRemoteBranchListOutputParser {
             }
     }
 }
+
+// MARK: - Status & Diff Output Parsers
 
 nonisolated private struct GitDiffNameStatusEntry: Equatable, Sendable {
     let status: GitFileDisplayStatus
@@ -2373,6 +2393,8 @@ nonisolated private enum GitDiffOutputParser {
         }
     }
 }
+
+// MARK: - Private Utilities
 
 private extension String {
     nonisolated func removingPrefix(_ prefix: String) -> String? {

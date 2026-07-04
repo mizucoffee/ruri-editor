@@ -25,6 +25,10 @@ struct ProjectSidebarView: View {
     let collapseSelectedFileTreeNodeOrSelectParent: () -> Void
     let activateSelectedFileTreeNode: () -> Void
     let renameFileTreeNode: (URL, String) -> Void
+    let expandFileTreeDirectory: (URL) -> Void
+    let createFileTreeNode: (URL, String, Bool) -> Void
+    let duplicateFileTreeNode: (URL) -> Void
+    let requestDeleteFileTreeNode: (FileNode) -> Void
 
     private var activeProject: ProjectWorkspaceSnapshot? {
         guard let activeProjectID else { return nil }
@@ -50,7 +54,11 @@ struct ProjectSidebarView: View {
                     expandSelectedNode: expandSelectedFileTreeNode,
                     collapseSelectedNodeOrSelectParent: collapseSelectedFileTreeNodeOrSelectParent,
                     activateSelectedNode: activateSelectedFileTreeNode,
-                    renameNode: renameFileTreeNode
+                    renameNode: renameFileTreeNode,
+                    expandDirectory: expandFileTreeDirectory,
+                    createNode: createFileTreeNode,
+                    duplicateNode: duplicateFileTreeNode,
+                    requestDelete: requestDeleteFileTreeNode
                 )
             } else {
                 ContentUnavailableView(
@@ -168,6 +176,10 @@ struct ProjectSidebarView: View {
         expandSelectedFileTreeNode: {},
         collapseSelectedFileTreeNodeOrSelectParent: {},
         activateSelectedFileTreeNode: {},
-        renameFileTreeNode: { _, _ in }
+        renameFileTreeNode: { _, _ in },
+        expandFileTreeDirectory: { _ in },
+        createFileTreeNode: { _, _, _ in },
+        duplicateFileTreeNode: { _ in },
+        requestDeleteFileTreeNode: { _ in }
     )
 }

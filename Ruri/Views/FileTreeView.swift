@@ -19,12 +19,20 @@ struct FileTreeView: View {
     let collapseSelectedNodeOrSelectParent: () -> Void
     let activateSelectedNode: () -> Void
     let renameNode: (URL, String) -> Void
+    let expandDirectory: (URL) -> Void
+    let createNode: (URL, String, Bool) -> Void
+    let duplicateNode: (URL) -> Void
+    let requestDelete: (FileNode) -> Void
 
     @FocusState private var isTreeFocused: Bool
     @FocusState private var focusedRenameURL: URL?
+    @FocusState private var isCreateFieldFocused: Bool
     @State private var renamingURL: URL?
     @State private var renamingOriginalName = ""
     @State private var renameText = ""
+    @State private var creatingParentURL: URL?
+    @State private var creatingIsDirectory = false
+    @State private var createText = ""
 
     var body: some View {
         GeometryReader { geometry in
@@ -35,6 +43,20 @@ struct FileTreeView: View {
             ScrollViewReader { proxy in
                 ScrollView(scrollAxes, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if let creatingParentURL,
+                           let projectURL,
+                           FileURLRewriter.urlsMatch(creatingParentURL, projectURL) {
+                            FileTreeCreateRow(
+                                isDirectory: creatingIsDirectory,
+                                level: 0,
+                                rowWidth: contentWidth,
+                                text: $createText,
+                                isFocused: $isCreateFieldFocused,
+                                commit: commitCreate,
+                                cancel: cancelCreate
+                            )
+                        }
+
                         ForEach(nodes) { node in
                             FileTreeRow(
                                 projectURL: projectURL,
@@ -43,17 +65,26 @@ struct FileTreeView: View {
                                 rowWidth: contentWidth,
                                 selectedURL: selectedURL,
                                 renamingURL: renamingURL,
+                                creatingParentURL: creatingParentURL,
+                                creatingIsDirectory: creatingIsDirectory,
                                 gitSnapshot: gitSnapshot,
                                 isSyntheticGitDeleted: false,
                                 renameText: $renameText,
+                                createText: $createText,
                                 focusedRenameURL: $focusedRenameURL,
+                                isCreateFieldFocused: $isCreateFieldFocused,
                                 focusTree: focusTree,
                                 selectNode: selectNode,
                                 openFile: openFile,
                                 toggleDirectory: toggleDirectory,
                                 beginRename: beginRename,
                                 commitRename: commitRename,
-                                cancelRename: cancelRename
+                                cancelRename: cancelRename,
+                                beginCreate: beginCreate,
+                                commitCreate: commitCreate,
+                                cancelCreate: cancelCreate,
+                                duplicateNode: duplicateNode,
+                                requestDelete: requestDelete
                             )
                         }
 
@@ -65,17 +96,26 @@ struct FileTreeView: View {
                                 rowWidth: contentWidth,
                                 selectedURL: selectedURL,
                                 renamingURL: renamingURL,
+                                creatingParentURL: creatingParentURL,
+                                creatingIsDirectory: creatingIsDirectory,
                                 gitSnapshot: gitSnapshot,
                                 isSyntheticGitDeleted: true,
                                 renameText: $renameText,
+                                createText: $createText,
                                 focusedRenameURL: $focusedRenameURL,
+                                isCreateFieldFocused: $isCreateFieldFocused,
                                 focusTree: focusTree,
                                 selectNode: selectNode,
                                 openFile: openFile,
                                 toggleDirectory: toggleDirectory,
                                 beginRename: beginRename,
                                 commitRename: commitRename,
-                                cancelRename: cancelRename
+                                cancelRename: cancelRename,
+                                beginCreate: beginCreate,
+                                commitCreate: commitCreate,
+                                cancelCreate: cancelCreate,
+                                duplicateNode: duplicateNode,
+                                requestDelete: requestDelete
                             )
                         }
                     }
@@ -101,27 +141,27 @@ struct FileTreeView: View {
         .focused($isTreeFocused)
         .focusEffectDisabled()
         .onKeyPress(.upArrow) {
-            guard !isRenaming else { return .ignored }
+            guard !isEditingInline else { return .ignored }
             moveSelection(-1)
             return .handled
         }
         .onKeyPress(.downArrow) {
-            guard !isRenaming else { return .ignored }
+            guard !isEditingInline else { return .ignored }
             moveSelection(1)
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            guard !isRenaming else { return .ignored }
+            guard !isEditingInline else { return .ignored }
             expandSelectedNode()
             return .handled
         }
         .onKeyPress(.leftArrow) {
-            guard !isRenaming else { return .ignored }
+            guard !isEditingInline else { return .ignored }
             collapseSelectedNodeOrSelectParent()
             return .handled
         }
         .onKeyPress(.return) {
-            guard !isRenaming else { return .ignored }
+            guard !isEditingInline else { return .ignored }
             activateSelectedNode()
             return .handled
         }
@@ -134,15 +174,93 @@ struct FileTreeView: View {
 
             commitRename()
         }
+        .onChange(of: isCreateFieldFocused) { oldValue, newValue in
+            guard oldValue, !newValue, isCreating else { return }
+            commitCreate()
+        }
+        .onChange(of: nodes) { _, newNodes in
+            guard let creatingParentURL else { return }
+
+            if let projectURL,
+               FileURLRewriter.urlsMatch(creatingParentURL, projectURL) {
+                return
+            }
+
+            guard let parentNode = findNode(at: creatingParentURL, in: newNodes),
+                  parentNode.isExpanded || parentNode.isLoadingChildren else {
+                cancelCreate()
+                return
+            }
+        }
     }
 
     private var isRenaming: Bool {
         renamingURL != nil
     }
 
+    private var isCreating: Bool {
+        creatingParentURL != nil
+    }
+
+    private var isEditingInline: Bool {
+        isRenaming || isCreating
+    }
+
     private func focusTree() {
-        guard !isRenaming else { return }
+        guard !isEditingInline else { return }
         isTreeFocused = true
+    }
+
+    private func beginCreate(_ node: FileNode, isDirectory: Bool) {
+        let parentURL = node.isDirectory
+            ? node.url
+            : node.url.deletingLastPathComponent()
+
+        if node.isDirectory {
+            expandDirectory(node.url)
+        }
+
+        creatingParentURL = parentURL.standardizedFileURL
+        creatingIsDirectory = isDirectory
+        createText = ""
+        isTreeFocused = false
+    }
+
+    private func commitCreate() {
+        guard let parentURL = creatingParentURL else { return }
+
+        let name = createText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isDirectory = creatingIsDirectory
+        creatingParentURL = nil
+        createText = ""
+        isCreateFieldFocused = false
+        isTreeFocused = true
+
+        guard !name.isEmpty else { return }
+
+        createNode(parentURL, name, isDirectory)
+    }
+
+    private func cancelCreate() {
+        creatingParentURL = nil
+        createText = ""
+        isCreateFieldFocused = false
+        isTreeFocused = true
+    }
+
+    private func findNode(at url: URL, in nodes: [FileNode]) -> FileNode? {
+        for node in nodes {
+            if FileURLRewriter.urlsMatch(node.url, url) {
+                return node
+            }
+
+            if let children = node.children,
+               let match = findNode(at: url, in: children) {
+                return match
+            }
+        }
+
+        return nil
     }
 
     private func beginRename(_ node: FileNode) {
@@ -266,27 +384,21 @@ struct FileTreeView: View {
     }
 }
 
+// ファイルツリーの Copy Path / Copy Relative Path 表示専用の整形。パス計算は FileURLRewriter へ委譲し、
+// ここでは非子孫→nil・プロジェクトroot自身→"." の表示フォールバックだけを担う。
+// 検索結果の分類（SearchResultPathPolicy）とは役割が別であり、統合しない。
 nonisolated enum FileTreePathFormatter {
     static func absolutePath(for url: URL) -> String {
         FileURLRewriter.normalizedPath(url)
     }
 
     static func relativePath(for url: URL, projectURL: URL?) -> String? {
-        guard let projectURL else { return nil }
-
-        let path = FileURLRewriter.normalizedPath(url)
-        let rootPath = FileURLRewriter.normalizedPath(projectURL)
-
-        if path == rootPath {
-            return "."
-        }
-
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-        guard path.hasPrefix(rootPrefix) else {
+        guard let projectURL,
+              let relativePath = FileURLRewriter.relativePath(from: projectURL, to: url) else {
             return nil
         }
 
-        return String(path.dropFirst(rootPrefix.count))
+        return relativePath.isEmpty ? "." : relativePath
     }
 }
 
@@ -297,10 +409,14 @@ private struct FileTreeRow: View {
     let rowWidth: CGFloat
     let selectedURL: URL?
     let renamingURL: URL?
+    let creatingParentURL: URL?
+    let creatingIsDirectory: Bool
     let gitSnapshot: GitRepositorySnapshot?
     let isSyntheticGitDeleted: Bool
     @Binding var renameText: String
+    @Binding var createText: String
     let focusedRenameURL: FocusState<URL?>.Binding
+    let isCreateFieldFocused: FocusState<Bool>.Binding
     let focusTree: () -> Void
     let selectNode: (URL) -> Void
     let openFile: (URL) -> Void
@@ -308,6 +424,11 @@ private struct FileTreeRow: View {
     let beginRename: (FileNode) -> Void
     let commitRename: () -> Void
     let cancelRename: () -> Void
+    let beginCreate: (FileNode, Bool) -> Void
+    let commitCreate: () -> Void
+    let cancelCreate: () -> Void
+    let duplicateNode: (URL) -> Void
+    let requestDelete: (FileNode) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -320,6 +441,11 @@ private struct FileTreeRow: View {
                 .frame(width: rowWidth, alignment: .leading)
                 .contentShape(Rectangle())
                 .background(selectionBackground)
+                .overlay {
+                    FileTreeRightClickCatcher(isEnabled: !isRenaming) {
+                        selectOnRightClick()
+                    }
+                }
                 .onTapGesture {
                     activateNode()
                 }
@@ -342,9 +468,45 @@ private struct FileTreeRow: View {
                         Divider()
 
                         Button {
+                            beginCreate(node, false)
+                        } label: {
+                            Label(AppText.newFileCommand, systemImage: "doc.badge.plus")
+                        }
+
+                        Button {
+                            beginCreate(node, true)
+                        } label: {
+                            Label(AppText.newFolderCommand, systemImage: "folder.badge.plus")
+                        }
+
+                        Divider()
+
+                        Button {
                             beginRename(node)
                         } label: {
                             Label(AppText.renameCommand, systemImage: "pencil")
+                        }
+
+                        Button {
+                            duplicateNode(node.url)
+                        } label: {
+                            Label(AppText.duplicateCommand, systemImage: "plus.square.on.square")
+                        }
+
+                        Divider()
+
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([node.url])
+                        } label: {
+                            Label(AppText.revealInFinderCommand, systemImage: "arrow.up.forward.app")
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive) {
+                            requestDelete(node)
+                        } label: {
+                            Label(AppText.moveToTrashCommand, systemImage: "trash")
                         }
                     }
                 }
@@ -353,6 +515,19 @@ private struct FileTreeRow: View {
                 if node.isLoadingChildren {
                     loadingRow
                 } else if let children = node.children {
+                    if let creatingParentURL,
+                       FileURLRewriter.urlsMatch(creatingParentURL, node.url) {
+                        FileTreeCreateRow(
+                            isDirectory: creatingIsDirectory,
+                            level: level + 1,
+                            rowWidth: rowWidth,
+                            text: $createText,
+                            isFocused: isCreateFieldFocused,
+                            commit: commitCreate,
+                            cancel: cancelCreate
+                        )
+                    }
+
                     ForEach(children) { child in
                         FileTreeRow(
                             projectURL: projectURL,
@@ -361,17 +536,26 @@ private struct FileTreeRow: View {
                             rowWidth: rowWidth,
                             selectedURL: selectedURL,
                             renamingURL: renamingURL,
+                            creatingParentURL: creatingParentURL,
+                            creatingIsDirectory: creatingIsDirectory,
                             gitSnapshot: gitSnapshot,
                             isSyntheticGitDeleted: false,
                             renameText: $renameText,
+                            createText: $createText,
                             focusedRenameURL: focusedRenameURL,
+                            isCreateFieldFocused: isCreateFieldFocused,
                             focusTree: focusTree,
                             selectNode: selectNode,
                             openFile: openFile,
                             toggleDirectory: toggleDirectory,
                             beginRename: beginRename,
                             commitRename: commitRename,
-                            cancelRename: cancelRename
+                            cancelRename: cancelRename,
+                            beginCreate: beginCreate,
+                            commitCreate: commitCreate,
+                            cancelCreate: cancelCreate,
+                            duplicateNode: duplicateNode,
+                            requestDelete: requestDelete
                         )
                     }
 
@@ -383,17 +567,26 @@ private struct FileTreeRow: View {
                             rowWidth: rowWidth,
                             selectedURL: selectedURL,
                             renamingURL: renamingURL,
+                            creatingParentURL: creatingParentURL,
+                            creatingIsDirectory: creatingIsDirectory,
                             gitSnapshot: gitSnapshot,
                             isSyntheticGitDeleted: true,
                             renameText: $renameText,
+                            createText: $createText,
                             focusedRenameURL: focusedRenameURL,
+                            isCreateFieldFocused: isCreateFieldFocused,
                             focusTree: focusTree,
                             selectNode: selectNode,
                             openFile: openFile,
                             toggleDirectory: toggleDirectory,
                             beginRename: beginRename,
                             commitRename: commitRename,
-                            cancelRename: cancelRename
+                            cancelRename: cancelRename,
+                            beginCreate: beginCreate,
+                            commitCreate: commitCreate,
+                            cancelCreate: cancelCreate,
+                            duplicateNode: duplicateNode,
+                            requestDelete: requestDelete
                         )
                     }
                 }
@@ -484,6 +677,11 @@ private struct FileTreeRow: View {
         NSPasteboard.general.setString(value, forType: .string)
     }
 
+    private func selectOnRightClick() {
+        guard !isSyntheticGitDeleted, !isSelected else { return }
+        selectNode(node.url)
+    }
+
     private var iconColor: Color {
         if isSyntheticGitDeleted {
             return .red
@@ -567,6 +765,102 @@ private struct FileTreeRow: View {
     }
 }
 
+// SwiftUIの.contextMenuには「メニューが開いた」ことを検知するAPIがない。ビルダーは通常の
+// 再描画でも評価されるため副作用を置けず、メニュー項目のonAppearも発火しない環境がある。
+// そのため右クリックをAppKitレベルで捕捉して選択を移し、イベント自体はsuperへ転送して
+// コンテキストメニュー表示は既定の機構に任せる。左クリックはhitTestで素通しし、
+// SwiftUI側のタップ処理やリネームTextFieldの編集メニューを妨げない。
+private struct FileTreeRightClickCatcher: NSViewRepresentable {
+    let isEnabled: Bool
+    let onRightClick: () -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        CatcherView()
+    }
+
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.isEnabled = isEnabled
+        nsView.onRightClick = onRightClick
+    }
+
+    final class CatcherView: NSView {
+        var isEnabled = true
+        var onRightClick: (() -> Void)?
+
+        deinit {}
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard isEnabled,
+                  let hitView = super.hitTest(point),
+                  hitView === self,
+                  NSApp.currentEvent?.type == .rightMouseDown else {
+                return nil
+            }
+
+            return self
+        }
+
+        override func rightMouseDown(with event: NSEvent) {
+            onRightClick?()
+            super.rightMouseDown(with: event)
+        }
+    }
+}
+
+private struct FileTreeCreateRow: View {
+    let isDirectory: Bool
+    let level: Int
+    let rowWidth: CGFloat
+    @Binding var text: String
+    let isFocused: FocusState<Bool>.Binding
+    let commit: () -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 10)
+                .opacity(isDirectory ? 1 : 0)
+
+            Image(systemName: isDirectory ? "folder" : "doc.text")
+                .font(.system(size: 11))
+                .frame(width: 14)
+                .foregroundStyle(.primary)
+
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .focused(isFocused)
+                .onSubmit {
+                    commit()
+                }
+                .onExitCommand {
+                    cancel()
+                }
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background {
+                    RoundedRectangle(cornerRadius: 3)
+                        .stroke(Color.accentColor, lineWidth: 1)
+                }
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: 20)
+        .padding(.leading, CGFloat(level) * 14 + 8)
+        .padding(.trailing, 8)
+        .frame(width: rowWidth, alignment: .leading)
+        .onAppear {
+            Task { @MainActor in
+                isFocused.wrappedValue = true
+            }
+        }
+    }
+}
+
 private enum IntelliJFileStatusColor {
     static func color(for status: GitFileDisplayStatus, colorScheme: ColorScheme) -> Color {
         let isDark = colorScheme == .dark
@@ -629,6 +923,10 @@ private enum IntelliJFileStatusColor {
         expandSelectedNode: {},
         collapseSelectedNodeOrSelectParent: {},
         activateSelectedNode: {},
-        renameNode: { _, _ in }
+        renameNode: { _, _ in },
+        expandDirectory: { _ in },
+        createNode: { _, _, _ in },
+        duplicateNode: { _ in },
+        requestDelete: { _ in }
     )
 }

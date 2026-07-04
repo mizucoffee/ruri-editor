@@ -5,6 +5,9 @@
 
 import Foundation
 
+// 検索・usage結果の相対パス文字列を「testディレクトリ配下か」で分類するポリシー。相対パスの計算は
+// 各呼び出し元が FileURLRewriter 経由で済ませている前提で、本型は文字列の解釈だけを担う。
+// パスの表示整形（FileTreeView の FileTreePathFormatter）とは役割が別であり、統合しない。
 enum SearchResultPathPolicy {
     private static func pathComponents(_ path: String) -> [String] {
         let normalizedPath = path

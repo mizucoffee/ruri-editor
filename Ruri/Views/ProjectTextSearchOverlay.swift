@@ -11,6 +11,8 @@ struct ProjectTextSearchOverlay: View {
     let openResult: (ProjectTextSearchResult) -> Void
 
     @FocusState private var isSearchFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("ruri.textSearch.previewSplitFraction") private var previewSplitFraction = 0.45
 
     var body: some View {
         Group {
@@ -46,10 +48,10 @@ struct ProjectTextSearchOverlay: View {
                 Divider()
 
                 resultArea
-                    .frame(height: 360)
+                    .frame(height: showsResultList ? 560 : 360)
             }
         }
-        .frame(width: 760)
+        .frame(width: 980)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -163,8 +165,20 @@ struct ProjectTextSearchOverlay: View {
         } else if viewModel.hasQuery && viewModel.results.isEmpty {
             statusRow(AppText.textSearchNoResults, showsProgress: false)
         } else {
-            resultList
+            OverlayVerticalSplit(topFraction: $previewSplitFraction) {
+                resultList
+            } bottom: {
+                TextSearchPreviewSection(
+                    preview: viewModel.preview,
+                    selectedResult: viewModel.selectedResult,
+                    colorScheme: colorScheme
+                )
+            }
         }
+    }
+
+    private var showsResultList: Bool {
+        !viewModel.isSearching && viewModel.errorMessage == nil && !viewModel.results.isEmpty
     }
 
     private var resultList: some View {
@@ -178,82 +192,120 @@ struct ProjectTextSearchOverlay: View {
                 }
                 .padding(.vertical, 6)
             }
-            .onChange(of: viewModel.selectedResultID) { _, selectedID in
-                guard let selectedID else { return }
+            .onChange(of: viewModel.selectionScrollRequest) { _, request in
+                guard let request else { return }
 
                 withAnimation(.easeOut(duration: 0.08)) {
-                    proxy.scrollTo(selectedID, anchor: .center)
+                    proxy.scrollTo(request.resultID, anchor: .center)
                 }
             }
         }
     }
 
     private func resultRow(_ result: ProjectTextSearchResult) -> some View {
-        Button {
-            open(result)
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            snippetText(for: result)
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-                    Text(result.fileName)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            Spacer(minLength: 16)
 
-                    Text(":\(result.lineNumber)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+            Text(result.fileName)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
 
-                    Spacer(minLength: 0)
-
-                    Text(result.displayParentPath)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("\(result.lineNumber)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 42, alignment: .trailing)
-
-                    snippetText(for: result)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .background(selectionBackground(for: result))
+            Text("\(result.lineNumber)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .background(selectionBackground(for: result))
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                viewModel.selectResult(result.id)
+            }
+        )
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                open(result)
+            }
+        )
     }
 
     private func snippetText(for result: ProjectTextSearchResult) -> Text {
-        let line = result.lineText as NSString
-        let clampedRange = result.lineMatchRange.nsRange.clamped(toUTF16Length: line.length)
-        guard clampedRange.length > 0 else {
-            return Text(verbatim: result.lineText)
+        Text(snippetAttributedString(for: result))
+    }
+
+    private func snippetAttributedString(for result: ProjectTextSearchResult) -> AttributedString {
+        let line = trimmedSnippetLine(for: result)
+        let string = line.text as String
+        var attributed = AttributedString(string)
+
+        if let syntaxRuns = viewModel.snippetSyntaxRuns[result.id], !syntaxRuns.isEmpty {
+            let themeName = SyntaxHighlightingService.themeName(
+                for: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+            )
+
+            for run in syntaxRuns {
+                let shiftedRange = NSRange(
+                    location: run.location - line.indentLength,
+                    length: run.length
+                ).clamped(toUTF16Length: line.text.length)
+                guard shiftedRange.length > 0,
+                      let stringRange = Range(shiftedRange, in: string),
+                      let attributedRange = Range(stringRange, in: attributed) else {
+                    continue
+                }
+
+                attributed[attributedRange].foregroundColor = Color(
+                    nsColor: SyntaxHighlightPalette.color(for: run.role, themeName: themeName)
+                )
+            }
         }
 
-        let prefix = line.substring(with: NSRange(location: 0, length: clampedRange.location))
-        let match = line.substring(with: clampedRange)
-        let suffixLocation = NSMaxRange(clampedRange)
-        let suffix = line.substring(
-            with: NSRange(location: suffixLocation, length: line.length - suffixLocation)
-        )
+        let matchRange = line.matchRange.clamped(toUTF16Length: line.text.length)
+        if matchRange.length > 0,
+           let stringRange = Range(matchRange, in: string),
+           let attributedRange = Range(stringRange, in: attributed) {
+            attributed[attributedRange].backgroundColor = Color(nsColor: .systemYellow)
+                .opacity(colorScheme == .dark ? 0.30 : 0.36)
+        }
 
-        return Text(verbatim: prefix)
-            + Text(verbatim: match).foregroundColor(.accentColor)
-            + Text(verbatim: suffix)
+        return attributed
+    }
+
+    private func trimmedSnippetLine(
+        for result: ProjectTextSearchResult
+    ) -> (text: NSString, matchRange: NSRange, indentLength: Int) {
+        let line = result.lineText as NSString
+        let matchRange = result.lineMatchRange.nsRange
+
+        var indentLength = 0
+        while indentLength < line.length {
+            let character = line.character(at: indentLength)
+            guard character == 0x20 || character == 0x09 else { break }
+            indentLength += 1
+        }
+
+        guard indentLength > 0 else {
+            return (line, matchRange, 0)
+        }
+
+        let trimmedText = line.substring(from: indentLength) as NSString
+        guard matchRange.location >= indentLength else {
+            return (trimmedText, NSRange(location: 0, length: 0), indentLength)
+        }
+
+        return (
+            trimmedText,
+            NSRange(location: matchRange.location - indentLength, length: matchRange.length),
+            indentLength
+        )
     }
 
     private func statusRow(_ text: LocalizedStringKey, showsProgress: Bool) -> some View {
@@ -311,6 +363,78 @@ struct ProjectTextSearchOverlay: View {
     private func open(_ result: ProjectTextSearchResult) {
         viewModel.dismiss()
         openResult(result)
+    }
+}
+
+private struct TextSearchPreviewSection: View {
+    @ObservedObject var preview: CodePreviewController
+    let selectedResult: ProjectTextSearchResult?
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+
+            content
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            if let selectedResult {
+                Text(verbatim: "\(selectedResult.relativePath):\(selectedResult.lineNumber)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let failure = preview.failure {
+            status(failure == .fileTooLarge ? AppText.textSearchPreviewTooLarge : AppText.textSearchPreviewUnavailable)
+        } else if let document = preview.document {
+            CodePreviewPane(document: document, colorScheme: colorScheme)
+                .overlay(alignment: .topTrailing) {
+                    if preview.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(8)
+                    }
+                }
+        } else {
+            status(AppText.textSearchPreviewLoading, showsProgress: preview.isLoading)
+        }
+    }
+
+    private func status(_ text: LocalizedStringKey, showsProgress: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            if showsProgress {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.top, 14)
     }
 }
 
@@ -416,22 +540,3 @@ private struct ProjectTextSearchKeyMonitor: NSViewRepresentable {
     }
 }
 
-private enum KeyCode {
-    static let returnKey: UInt16 = 36
-    static let keypadEnter: UInt16 = 76
-    static let escape: UInt16 = 53
-    static let downArrow: UInt16 = 125
-    static let upArrow: UInt16 = 126
-}
-
-private extension NSRange {
-    func clamped(toUTF16Length length: Int) -> NSRange {
-        guard location != NSNotFound else {
-            return NSRange(location: length, length: 0)
-        }
-
-        let clampedLocation = min(max(0, location), length)
-        let maximumLength = max(0, length - clampedLocation)
-        return NSRange(location: clampedLocation, length: min(max(0, self.length), maximumLength))
-    }
-}

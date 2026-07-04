@@ -49,6 +49,11 @@ struct EditorTabStore {
         selectedTabID = id
     }
 
+    mutating func selectTab(atShortcutNumber number: Int) {
+        guard let tab = tabForShortcutNumber(number) else { return }
+        selectedTabID = tab.id
+    }
+
     mutating func openTab(
         for documentID: OpenDocument.ID,
         replaceSelectedMainTab: Bool
@@ -120,6 +125,17 @@ struct EditorTabStore {
     private var selectedTabIDNeedsRepair: Bool {
         guard let selectedTabID else { return false }
         return !tabs.contains { $0.id == selectedTabID }
+    }
+
+    private func tabForShortcutNumber(_ number: Int) -> EditorTab? {
+        if number == 0 {
+            return tabs.last
+        }
+
+        guard (1...9).contains(number) else { return nil }
+        let index = number - 1
+        guard tabs.indices.contains(index) else { return nil }
+        return tabs[index]
     }
 
     private mutating func selectMainTabNear(_ index: Int) {

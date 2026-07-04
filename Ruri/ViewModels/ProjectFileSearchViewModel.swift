@@ -14,8 +14,8 @@ final class ProjectFileSearchViewModel: ObservableObject {
             scheduleSearch()
         }
     }
-    @Published private(set) var results: [ProjectFileSearchEntry] = []
-    @Published private(set) var selectedResultID: ProjectFileSearchEntry.ID?
+    @Published private(set) var results: [ProjectFileSearchResult] = []
+    @Published private(set) var selectedResultID: ProjectFileSearchResult.ID?
     @Published private(set) var isIndexing = false
     @Published private(set) var indexStatus = ProjectFileSearchIndexStatusState.inactive
     @Published private(set) var errorMessage: String?
@@ -31,7 +31,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    var selectedResult: ProjectFileSearchEntry? {
+    var selectedResult: ProjectFileSearchResult? {
         guard let selectedResultID else { return results.first }
         return results.first { $0.id == selectedResultID } ?? results.first
     }
@@ -115,7 +115,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
         ensureIndex(for: standardizedURL)
     }
 
-    func selectResult(_ id: ProjectFileSearchEntry.ID) {
+    func selectResult(_ id: ProjectFileSearchResult.ID) {
         guard results.contains(where: { $0.id == id }) else { return }
         selectedResultID = id
     }
@@ -241,7 +241,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
     }
 
     private func finishSearch(
-        _ results: [ProjectFileSearchEntry],
+        _ results: [ProjectFileSearchResult],
         query: String,
         projectURL: URL
     ) {

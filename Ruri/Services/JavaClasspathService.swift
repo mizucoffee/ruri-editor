@@ -257,15 +257,23 @@ nonisolated struct JavaClasspathCommandRunner: JavaClasspathCommandRunning {
             terminationSemaphore.signal()
         }
 
+        let stdoutEOFSemaphore = DispatchSemaphore(value: 0)
+        let stderrEOFSemaphore = DispatchSemaphore(value: 0)
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutEOFSemaphore.signal()
+            } else {
                 stdout.append(data)
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrEOFSemaphore.signal()
+            } else {
                 stderr.append(data)
             }
         }
@@ -278,14 +286,16 @@ nonisolated struct JavaClasspathCommandRunner: JavaClasspathCommandRunning {
         }
 
         if terminationSemaphore.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
+            SafeProcessLauncher.terminateWithEscalation(process)
             cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
             throw JavaSymbolResolverError(message: "Classpath command timed out.")
         }
 
+        // 終了直前のバースト出力をハンドラがEOFまで読み切るのを待ってから結果を確定する。
+        // 孫プロセスがpipeを保持し続ける場合に備えて待ちは有限にする。
+        _ = stdoutEOFSemaphore.wait(timeout: .now() + 2)
+        _ = stderrEOFSemaphore.wait(timeout: .now() + 2)
         cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
-        appendRemaining(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe, stdout: stdout, stderr: stderr)
 
         return JavaClasspathCommandResult(
             stdout: stdout.data(),
@@ -297,23 +307,6 @@ nonisolated struct JavaClasspathCommandRunner: JavaClasspathCommandRunning {
     private static func cleanup(stdoutPipe: Pipe, stderrPipe: Pipe) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-    }
-
-    private static func appendRemaining(
-        stdoutPipe: Pipe,
-        stderrPipe: Pipe,
-        stdout: JavaClasspathLockedData,
-        stderr: JavaClasspathLockedData
-    ) {
-        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
-        if !remainingStdout.isEmpty {
-            stdout.append(remainingStdout)
-        }
-
-        let remainingStderr = stderrPipe.fileHandleForReading.availableData
-        if !remainingStderr.isEmpty {
-            stderr.append(remainingStderr)
-        }
     }
 }
 

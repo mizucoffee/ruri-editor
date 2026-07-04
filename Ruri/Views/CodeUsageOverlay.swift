@@ -373,19 +373,3 @@ private struct CodeUsageKeyMonitor: NSViewRepresentable {
     }
 }
 
-private enum KeyCode {
-    static let returnKey: UInt16 = 36
-    static let keypadEnter: UInt16 = 76
-    static let escape: UInt16 = 53
-    static let downArrow: UInt16 = 125
-    static let upArrow: UInt16 = 126
-}
-
-private extension NSRange {
-    func clamped(toUTF16Length length: Int) -> NSRange {
-        let rawLocation = location == NSNotFound ? length : location
-        let clampedLocation = min(max(0, rawLocation), length)
-        let maxLength = max(0, length - clampedLocation)
-        return NSRange(location: clampedLocation, length: min(max(0, self.length), maxLength))
-    }
-}

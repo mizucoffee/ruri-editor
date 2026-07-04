@@ -242,6 +242,128 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         XCTAssertEqual(height, 30)
     }
 
+    func testReviewDiffScrollWheelForwardsVerticalGestureToParent() {
+        let route = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureBegan,
+            deltaX: 2,
+            deltaY: -12,
+            canScrollHorizontally: true,
+            activeRoute: nil
+        )
+
+        XCTAssertEqual(route, .parent)
+    }
+
+    func testReviewDiffScrollWheelHandlesHorizontalGestureInPane() {
+        let route = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureBegan,
+            deltaX: -14,
+            deltaY: 3,
+            canScrollHorizontally: true,
+            activeRoute: nil
+        )
+
+        XCTAssertEqual(route, .pane)
+    }
+
+    func testReviewDiffScrollWheelForwardsHorizontalGestureWhenContentFits() {
+        let route = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureBegan,
+            deltaX: -14,
+            deltaY: 3,
+            canScrollHorizontally: false,
+            activeRoute: nil
+        )
+
+        XCTAssertEqual(route, .parent)
+    }
+
+    func testReviewDiffScrollWheelDefersRouteUntilGestureMoves() {
+        let began = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureBegan,
+            deltaX: 0,
+            deltaY: 0,
+            canScrollHorizontally: true,
+            activeRoute: nil
+        )
+        let firstMove = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureActive,
+            deltaX: -14,
+            deltaY: 3,
+            canScrollHorizontally: true,
+            activeRoute: nil
+        )
+
+        XCTAssertNil(began)
+        XCTAssertEqual(firstMove, .pane)
+    }
+
+    func testReviewDiffScrollWheelKeepsActiveRouteDuringGestureAndMomentum() {
+        let active = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .gestureActive,
+            deltaX: 1,
+            deltaY: -20,
+            canScrollHorizontally: true,
+            activeRoute: .pane
+        )
+        let momentum = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .momentum,
+            deltaX: 1,
+            deltaY: -20,
+            canScrollHorizontally: true,
+            activeRoute: .pane
+        )
+
+        XCTAssertEqual(active, .pane)
+        XCTAssertEqual(momentum, .pane)
+    }
+
+    func testReviewDiffScrollWheelForwardsUnclaimedMomentumToParent() {
+        let route = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .momentum,
+            deltaX: -14,
+            deltaY: 3,
+            canScrollHorizontally: true,
+            activeRoute: nil
+        )
+
+        XCTAssertEqual(route, .parent)
+    }
+
+    func testReviewDiffScrollWheelRoutesDiscreteEventsPerEvent() {
+        let horizontal = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .discrete,
+            deltaX: -6,
+            deltaY: 1,
+            canScrollHorizontally: true,
+            activeRoute: .parent
+        )
+        let vertical = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .discrete,
+            deltaX: 0,
+            deltaY: -6,
+            canScrollHorizontally: true,
+            activeRoute: .pane
+        )
+        let idle = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: .discrete,
+            deltaX: 0,
+            deltaY: 0,
+            canScrollHorizontally: true,
+            activeRoute: .pane
+        )
+
+        XCTAssertEqual(horizontal, .pane)
+        XCTAssertEqual(vertical, .parent)
+        XCTAssertEqual(idle, .parent)
+    }
+
+    func testReviewDiffCanScrollHorizontallyRequiresOverflow() {
+        XCTAssertTrue(ReviewDiffScrollLayout.canScrollHorizontally(documentWidth: 900, viewportWidth: 400))
+        XCTAssertFalse(ReviewDiffScrollLayout.canScrollHorizontally(documentWidth: 400, viewportWidth: 400))
+        XCTAssertFalse(ReviewDiffScrollLayout.canScrollHorizontally(documentWidth: 320, viewportWidth: 400))
+    }
+
     func testSyntaxHighlightsOnlyMatchCurrentRequestID() {
         let key = ReviewDiffLineKey(hunkIndex: 0, lineIndex: 0, side: .new)
         let highlights = ReviewDiffSyntaxHighlights(

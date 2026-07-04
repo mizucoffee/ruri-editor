@@ -10,10 +10,10 @@ import UniformTypeIdentifiers
 import AppKit
 
 struct ContentView: View {
-    @ObservedObject var editor: EditorState
+    @ObservedObject var editor: EditorViewModel
     @ObservedObject var editorRuntimeStore: EditorRuntimeStore
-    @ObservedObject var terminalState: TerminalState
-    @ObservedObject var runConfigurationState: RunConfigurationState
+    @ObservedObject var terminalState: TerminalViewModel
+    @ObservedObject var runConfigurationState: RunConfigurationViewModel
     @ObservedObject var textSearch: ProjectTextSearchViewModel
     @ObservedObject var tabInputSettings: EditorTabInputSettingsStore
     @ObservedObject var lineWrappingSettings: EditorLineWrappingSettingsStore
@@ -23,7 +23,7 @@ struct ContentView: View {
     let openProjectInNewWindow: (URL) -> Void
     @StateObject private var fileSearch = ProjectFileSearchViewModel()
     @StateObject private var codeUsage = CodeUsageViewModel()
-    @StateObject private var worktreeInitialization = WorktreeInitializationState()
+    @StateObject private var worktreeInitialization = WorktreeInitializationViewModel()
     @State private var codeNavigationToast: CodeNavigationToast?
     @State private var codeNavigationToastTask: Task<Void, Never>?
     @State private var isNewWorktreeSheetPresented = false
@@ -40,73 +40,103 @@ struct ContentView: View {
     @State private var remoteWorktreeErrorMessage: String?
     @State private var worktreeDeletionTarget: WorktreeDeletionTarget?
     @State private var isDeletingWorktree = false
+    @State private var fileTreeDeletionTarget: FileNode?
 
-    var body: some View {
-        NavigationSplitView {
-            ProjectSidebarView(
-                projectWorkspaces: editor.projectWorkspaces,
-                activeProjectID: editor.activeProjectID,
-                projectURL: editor.projectURL,
-                fileTree: editor.fileTree,
-                selectedFileTreeURL: editor.selectedFileTreeURL,
-                gitSnapshot: editor.gitSnapshot,
-                isFileTreeShowingChangedFilesOnly: editor.isFileTreeShowingChangedFilesOnly,
-                canShowChangedFilesOnlyInFileTree: editor.canShowChangedFilesOnlyInFileTree,
-                canFocusSelectedFileInTree: editor.canFocusSelectedFileInTree,
-                selectFileTreeNode: { editor.selectFileTreeNode($0) },
-                toggleFileTreeChangedFilesOnly: {
-                    editor.toggleFileTreeChangedFilesOnly()
-                },
-                focusSelectedFileInTree: {
-                    Task {
-                        await editor.focusSelectedFileInTree()
-                    }
-                },
-                openFile: { url in
-                    openFile(url, activationFocusBehavior: .keepCurrentFocus)
-                },
-                toggleDirectory: { url in
-                    Task {
-                        await editor.toggleDirectory(url)
-                    }
-                },
-                moveFileTreeSelection: { offset in
-                    editor.moveFileTreeSelection(by: offset)
-                },
-                expandSelectedFileTreeNode: {
-                    Task {
-                        await editor.expandSelectedFileTreeNode()
-                    }
-                },
-                collapseSelectedFileTreeNodeOrSelectParent: {
-                    editor.collapseSelectedFileTreeNodeOrSelectParent()
-                },
-                activateSelectedFileTreeNode: {
-                    if let selectedURL = editor.selectedFileTreeURL {
-                        editorRuntimeStore.requestActivationFocusBehavior(
-                            .keepCurrentFocus,
-                            for: selectedURL
+    private var projectSidebar: some View {
+        ProjectSidebarView(
+            projectWorkspaces: editor.projectWorkspaces,
+            activeProjectID: editor.activeProjectID,
+            projectURL: editor.projectURL,
+            fileTree: editor.fileTree,
+            selectedFileTreeURL: editor.selectedFileTreeURL,
+            gitSnapshot: editor.gitSnapshot,
+            isFileTreeShowingChangedFilesOnly: editor.isFileTreeShowingChangedFilesOnly,
+            canShowChangedFilesOnlyInFileTree: editor.canShowChangedFilesOnlyInFileTree,
+            canFocusSelectedFileInTree: editor.canFocusSelectedFileInTree,
+            selectFileTreeNode: { editor.selectFileTreeNode($0) },
+            toggleFileTreeChangedFilesOnly: {
+                editor.toggleFileTreeChangedFilesOnly()
+            },
+            focusSelectedFileInTree: {
+                Task {
+                    await editor.focusSelectedFileInTree()
+                }
+            },
+            openFile: { url in
+                openFile(url, activationFocusBehavior: .keepCurrentFocus)
+            },
+            toggleDirectory: { url in
+                Task {
+                    await editor.toggleDirectory(url)
+                }
+            },
+            moveFileTreeSelection: { offset in
+                editor.moveFileTreeSelection(by: offset)
+            },
+            expandSelectedFileTreeNode: {
+                Task {
+                    await editor.expandSelectedFileTreeNode()
+                }
+            },
+            collapseSelectedFileTreeNodeOrSelectParent: {
+                editor.collapseSelectedFileTreeNodeOrSelectParent()
+            },
+            activateSelectedFileTreeNode: {
+                if let selectedURL = editor.selectedFileTreeURL {
+                    editorRuntimeStore.requestActivationFocusBehavior(
+                        .keepCurrentFocus,
+                        for: selectedURL
+                    )
+                }
+
+                Task {
+                    if let closedDocument = await editor.activateSelectedFileTreeNode() {
+                        editorRuntimeStore.closeDocument(
+                            workspaceID: closedDocument.workspaceID,
+                            documentID: closedDocument.documentID
                         )
                     }
-
-                    Task {
-                        if let closedDocument = await editor.activateSelectedFileTreeNode() {
-                            editorRuntimeStore.closeDocument(
-                                workspaceID: closedDocument.workspaceID,
-                                documentID: closedDocument.documentID
-                            )
-                        }
-                    }
-                },
-                renameFileTreeNode: { url, newName in
-                    Task {
-                        await editor.renameFileTreeNode(url, to: newName)
-                        fileSearch.invalidateIndex(for: editor.projectURL)
-                    }
                 }
-            )
-            .navigationSplitViewColumnWidth(min: 220, ideal: 280)
-        } detail: {
+            },
+            renameFileTreeNode: { url, newName in
+                Task {
+                    await editor.renameFileTreeNode(url, to: newName)
+                    fileSearch.invalidateIndex(for: editor.projectURL)
+                }
+            },
+            expandFileTreeDirectory: { url in
+                Task {
+                    await editor.expandFileTreeDirectory(url)
+                }
+            },
+            createFileTreeNode: { parentURL, name, isDirectory in
+                Task {
+                    if let closedDocument = await editor.createFileTreeNode(
+                        named: name,
+                        in: parentURL,
+                        isDirectory: isDirectory
+                    ) {
+                        editorRuntimeStore.closeDocument(
+                            workspaceID: closedDocument.workspaceID,
+                            documentID: closedDocument.documentID
+                        )
+                    }
+                    fileSearch.invalidateIndex(for: editor.projectURL)
+                }
+            },
+            duplicateFileTreeNode: { url in
+                Task {
+                    await editor.duplicateFileTreeNode(url)
+                    fileSearch.invalidateIndex(for: editor.projectURL)
+                }
+            },
+            requestDeleteFileTreeNode: { node in
+                fileTreeDeletionTarget = node
+            }
+        )
+    }
+
+    private var detailPane: some View {
             Color.clear.overlay {
                 EditorPaneView(
                     runtimeStore: editorRuntimeStore,
@@ -232,6 +262,14 @@ struct ContentView: View {
                 )
                 .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
             }
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            projectSidebar
+                .navigationSplitViewColumnWidth(min: 220, ideal: 280)
+        } detail: {
+            detailPane
         }
         .onAppear {
             syncTerminalWorkspace()
@@ -381,6 +419,10 @@ struct ContentView: View {
             }
             Text(AppText.deleteWorktreeAlertMessage)
         }
+        .modifier(FileTreeDeletionAlertModifier(
+            target: $fileTreeDeletionTarget,
+            confirmDelete: deleteFileTreeNode
+        ))
         .alert(
             AppText.errorTitle,
             isPresented: Binding(
@@ -628,6 +670,23 @@ struct ContentView: View {
         }
     }
 
+    private func deleteFileTreeNode() {
+        guard let target = fileTreeDeletionTarget else { return }
+
+        fileTreeDeletionTarget = nil
+
+        Task {
+            let closedDocuments = await editor.deleteFileTreeNode(target.url)
+            for closedDocument in closedDocuments {
+                editorRuntimeStore.closeDocument(
+                    workspaceID: closedDocument.workspaceID,
+                    documentID: closedDocument.documentID
+                )
+            }
+            fileSearch.invalidateIndex(for: editor.projectURL)
+        }
+    }
+
     private func pullWorktree(_ workspaceID: ProjectWorkspaceSnapshot.ID) {
         Task {
             do {
@@ -714,7 +773,7 @@ struct ContentView: View {
 
     private static func openTerminalFile(
         _ request: TerminalFileOpenRequest,
-        editor: EditorState,
+        editor: EditorViewModel,
         editorRuntimeStore: EditorRuntimeStore
     ) {
         editorRuntimeStore.requestActivationFocusBehavior(.focusTextView, for: request.url)
@@ -841,12 +900,39 @@ struct ContentView: View {
     }
 }
 
+private struct FileTreeDeletionAlertModifier: ViewModifier {
+    @Binding var target: FileNode?
+    let confirmDelete: () -> Void
+
+    func body(content: Content) -> some View {
+        content.alert(
+            AppText.moveToTrashAlertTitle,
+            isPresented: Binding(
+                get: { target != nil },
+                set: { if !$0 { target = nil } }
+            )
+        ) {
+            Button(AppText.moveToTrashButton, role: .destructive) {
+                confirmDelete()
+            }
+
+            Button(AppText.cancelButton, role: .cancel) {
+                target = nil
+            }
+        } message: {
+            if let target {
+                Text("\"\(target.name)\" をゴミ箱に移動します。開いているタブは閉じられます。")
+            }
+        }
+    }
+}
+
 #Preview {
     ContentView(
-        editor: EditorState(),
+        editor: EditorViewModel(),
         editorRuntimeStore: EditorRuntimeStore(),
-        terminalState: TerminalState(),
-        runConfigurationState: RunConfigurationState(),
+        terminalState: TerminalViewModel(),
+        runConfigurationState: RunConfigurationViewModel(),
         textSearch: ProjectTextSearchViewModel(),
         tabInputSettings: EditorTabInputSettingsStore(),
         lineWrappingSettings: EditorLineWrappingSettingsStore(),

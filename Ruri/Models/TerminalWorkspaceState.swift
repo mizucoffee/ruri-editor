@@ -109,6 +109,13 @@ struct TerminalWorkspaceState {
         selectedTabID = id
     }
 
+    @discardableResult
+    mutating func selectTab(atShortcutNumber number: Int) -> TerminalTab.ID? {
+        guard let tab = tabForShortcutNumber(number) else { return nil }
+        selectedTabID = tab.id
+        return tab.id
+    }
+
     mutating func requestCloseTab(_ id: TerminalTab.ID) -> TerminalCloseDecision? {
         guard let tab = tab(for: id) else { return nil }
 
@@ -181,6 +188,17 @@ struct TerminalWorkspaceState {
     private var selectedTabIDNeedsRepair: Bool {
         guard let selectedTabID else { return false }
         return !tabs.contains { $0.id == selectedTabID }
+    }
+
+    private func tabForShortcutNumber(_ number: Int) -> TerminalTab? {
+        if number == 0 {
+            return tabs.last
+        }
+
+        guard (1...9).contains(number) else { return nil }
+        let index = number - 1
+        guard tabs.indices.contains(index) else { return nil }
+        return tabs[index]
     }
 
     private mutating func selectTabNear(_ index: Int) {

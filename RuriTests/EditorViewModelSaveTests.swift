@@ -1,5 +1,5 @@
 //
-//  EditorStateSaveTests.swift
+//  EditorViewModelSaveTests.swift
 //  ruriTests
 //
 
@@ -7,7 +7,7 @@ import XCTest
 @testable import ruri
 
 @MainActor
-final class EditorStateSaveTests: XCTestCase {
+final class EditorViewModelSaveTests: XCTestCase {
     private let fileManager = FileManager.default
 
     func testSaveSelectedFileWritesCurrentTextAndClearsDirtyState() async throws {
@@ -17,7 +17,7 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         editor.updateSelectedText("changed")
@@ -37,7 +37,7 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Tab.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         let tabID = try XCTUnwrap(editor.selectedTabID)
@@ -59,7 +59,7 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Manual.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
 
@@ -79,7 +79,7 @@ final class EditorStateSaveTests: XCTestCase {
         let renamedURL = rootURL.appending(path: "Renamed.txt").standardizedFileURL
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         editor.updateSelectedText("changed")
@@ -103,13 +103,13 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         let tabID = try XCTUnwrap(editor.selectedTabID)
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -133,7 +133,7 @@ final class EditorStateSaveTests: XCTestCase {
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
         try "other".write(to: otherURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         let tabID = try XCTUnwrap(editor.selectedTabID)
@@ -141,7 +141,7 @@ final class EditorStateSaveTests: XCTestCase {
         XCTAssertEqual(editor.fileTree.map(\.name), ["Note.txt", "Other.txt"])
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -165,7 +165,7 @@ final class EditorStateSaveTests: XCTestCase {
         try "app".write(to: sourcesURL.appending(path: "App.swift"), atomically: true, encoding: .utf8)
         try "readme".write(to: docsURL.appending(path: "Readme.md"), atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
 
         XCTAssertEqual(editor.fileTree.map(\.name), ["Docs", "Sources"])
@@ -188,7 +188,7 @@ final class EditorStateSaveTests: XCTestCase {
         try "first original".write(to: firstURL, atomically: true, encoding: .utf8)
         try "second original".write(to: secondURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(firstURL)
         let firstTabID = try XCTUnwrap(editor.selectedTabID)
@@ -226,14 +226,14 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         let tabID = try XCTUnwrap(editor.selectedTabID)
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -257,13 +257,13 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -283,13 +283,13 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -310,13 +310,13 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         editor.updateSelectedText("local edit")
 
         try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -325,6 +325,73 @@ final class EditorStateSaveTests: XCTestCase {
         await editor.confirmSaveConflictOverwrite()
 
         XCTAssertNil(editor.saveConflictConfirmation)
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "local edit")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+        XCTAssertFalse(editor.canSave)
+    }
+
+    func testSavingDetectsExternalChangeNotYetObservedByWatcher() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let fileURL = rootURL.appending(path: "Note.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        await editor.openFile(fileURL)
+        editor.updateSelectedText("local edit")
+
+        // watcherに通知しないまま外部変更を加え、保存時のcompare-and-swapだけで検出させる。
+        try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        await editor.saveSelectedFile()
+
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "external content")
+        XCTAssertEqual(editor.saveConflictConfirmation?.fileName, "Note.txt")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .conflict)
+        XCTAssertTrue(editor.canSave)
+
+        await editor.confirmSaveConflictOverwrite()
+
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "local edit")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
+        XCTAssertFalse(editor.canSave)
+    }
+
+    func testConfirmedOverwriteRepromptsWhenFileChangedAgain() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let fileURL = rootURL.appending(path: "Note.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        await editor.openFile(fileURL)
+        editor.updateSelectedText("local edit")
+
+        try "external content".write(to: fileURL, atomically: true, encoding: .utf8)
+        await editor.handleExternalContentChange(
+            for: rootURL,
+            changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
+        )
+        await editor.saveSelectedFile()
+
+        XCTAssertEqual(editor.saveConflictConfirmation?.fileName, "Note.txt")
+
+        // 確認ダイアログ表示中にさらに外部変更が入った場合は上書きせず再確認する。
+        try "external content again".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        await editor.confirmSaveConflictOverwrite()
+
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "external content again")
+        XCTAssertEqual(editor.saveConflictConfirmation?.fileName, "Note.txt")
+        XCTAssertEqual(editor.tabs.first?.externalStatus, .conflict)
+        XCTAssertTrue(editor.canSave)
+
+        await editor.confirmSaveConflictOverwrite()
+
         XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "local edit")
         XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
         XCTAssertFalse(editor.canSave)
@@ -342,7 +409,7 @@ final class EditorStateSaveTests: XCTestCase {
             ofItemAtPath: fileURL.path(percentEncoded: false)
         )
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
 
@@ -351,7 +418,7 @@ final class EditorStateSaveTests: XCTestCase {
             [.modificationDate: fixedModificationDate],
             ofItemAtPath: fileURL.path(percentEncoded: false)
         )
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -378,7 +445,7 @@ final class EditorStateSaveTests: XCTestCase {
             ofItemAtPath: fileURL.path(percentEncoded: false)
         )
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
 
@@ -387,7 +454,7 @@ final class EditorStateSaveTests: XCTestCase {
             [.modificationDate: fixedModificationDate],
             ofItemAtPath: fileURL.path(percentEncoded: false)
         )
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalContentChange(for: rootURL)
 
         XCTAssertEqual(editor.selectedText, "original")
         XCTAssertEqual(editor.tabs.first?.externalStatus, .normal)
@@ -401,12 +468,12 @@ final class EditorStateSaveTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "original".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
 
         try fileManager.removeItem(at: fileURL)
-        await editor.handleExternalProjectChange(
+        await editor.handleExternalContentChange(
             for: rootURL,
             changedPaths: [fileURL.standardizedFileURL.path(percentEncoded: false)]
         )
@@ -436,22 +503,20 @@ final class EditorStateSaveTests: XCTestCase {
         let secondURL = rootURL.appending(path: "Second.txt")
         try "first".write(to: firstURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
 
         XCTAssertEqual(editor.fileTree.map(\.name), ["First.txt"])
 
         try "second".write(to: secondURL, atomically: true, encoding: .utf8)
         try fileManager.removeItem(at: firstURL)
-        await editor.handleExternalProjectChange(for: rootURL)
+        await editor.handleExternalContentChange(for: rootURL)
 
         XCTAssertEqual(editor.fileTree.map(\.name), ["Second.txt"])
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 
 }

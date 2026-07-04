@@ -30,6 +30,8 @@ final class RuntimeTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         drawSelectedLineHighlights(in: dirtyRect)
         drawIndentGuides(in: dirtyRect)
+        drawOccurrenceHighlights(in: dirtyRect)
+        drawBracketHighlights(in: dirtyRect)
         drawFindHighlights(in: dirtyRect)
         super.draw(dirtyRect)
     }
@@ -114,6 +116,20 @@ final class RuntimeTextView: NSTextView {
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         runtime?.updateImplementationHover(at: event)
+    }
+
+    override func selectionRange(
+        forProposedRange proposedCharRange: NSRange,
+        granularity: NSSelectionGranularity
+    ) -> NSRange {
+        let fallback = super.selectionRange(forProposedRange: proposedCharRange, granularity: granularity)
+        guard granularity == .selectByWord else { return fallback }
+
+        return EditorWordSelection.wordSelectionRange(
+            in: string as NSString,
+            proposedRange: proposedCharRange,
+            fallback: fallback
+        )
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -434,6 +450,72 @@ final class RuntimeTextView: NSTextView {
         }
     }
 
+    private func drawOccurrenceHighlights(in dirtyRect: NSRect) {
+        guard let occurrenceRanges = runtime?.occurrenceHighlightRanges,
+              !occurrenceRanges.isEmpty,
+              let layoutManager,
+              let textContainer else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let textLength = (string as NSString).length
+        EditorOccurrenceHighlightStyle.fillColor(for: effectiveAppearance).setFill()
+
+        for range in occurrenceRanges where range.length > 0 && NSMaxRange(range) <= textLength {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { rect, _ in
+                let highlightRect = rect
+                    .offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                    .insetBy(dx: -1, dy: -0.5)
+                if highlightRect.intersects(dirtyRect) {
+                    NSBezierPath(roundedRect: highlightRect, xRadius: 2, yRadius: 2).fill()
+                }
+            }
+        }
+    }
+
+    private func drawBracketHighlights(in dirtyRect: NSRect) {
+        guard let bracketRanges = runtime?.bracketHighlightRanges,
+              !bracketRanges.isEmpty,
+              let layoutManager,
+              let textContainer else {
+            return
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let textLength = (string as NSString).length
+        EditorOccurrenceHighlightStyle.fillColor(for: effectiveAppearance).setFill()
+
+        for range in bracketRanges where range.length > 0 && NSMaxRange(range) <= textLength {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { rect, _ in
+                let highlightRect = rect
+                    .offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                    .insetBy(dx: -1, dy: -0.5)
+                if highlightRect.intersects(dirtyRect) {
+                    NSBezierPath(roundedRect: highlightRect, xRadius: 2, yRadius: 2).fill()
+                }
+            }
+        }
+    }
+
     private func drawFindHighlights(in dirtyRect: NSRect) {
         guard let findState = runtime?.findState,
               findState.isPresented,
@@ -531,6 +613,13 @@ private enum EditorLineHighlightStyle {
             ? 0.16
             : 0.10
         return NSColor.controlAccentColor.withAlphaComponent(alpha)
+    }
+}
+
+private enum EditorOccurrenceHighlightStyle {
+    static func fillColor(for appearance: NSAppearance) -> NSColor {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return NSColor.systemGray.withAlphaComponent(isDark ? 0.30 : 0.20)
     }
 }
 

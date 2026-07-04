@@ -7,10 +7,10 @@ import AppKit
 import SwiftUI
 
 struct AppCommands: Commands {
-    @FocusedObject private var editor: EditorState?
+    @FocusedObject private var editor: EditorViewModel?
     @FocusedObject private var editorRuntimeStore: EditorRuntimeStore?
-    @FocusedObject private var terminalState: TerminalState?
-    @FocusedObject private var runConfigurationState: RunConfigurationState?
+    @FocusedObject private var terminalState: TerminalViewModel?
+    @FocusedObject private var runConfigurationState: RunConfigurationViewModel?
     @FocusedObject private var textSearch: ProjectTextSearchViewModel?
     @FocusedObject private var lineWrappingSettings: EditorLineWrappingSettingsStore?
     @FocusedValue(\.ruriOpenFolderCommandAction) private var openFolderCommandAction
@@ -34,6 +34,68 @@ struct AppCommands: Commands {
                 closeCommandTarget()
             }
             .keyboardShortcut("w", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Divider()
+
+            Button(AppText.selectLastTabCommand) {
+                editor?.selectTab(atShortcutNumber: 0)
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab1Command) {
+                editor?.selectTab(atShortcutNumber: 1)
+            }
+            .keyboardShortcut("1", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab2Command) {
+                editor?.selectTab(atShortcutNumber: 2)
+            }
+            .keyboardShortcut("2", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab3Command) {
+                editor?.selectTab(atShortcutNumber: 3)
+            }
+            .keyboardShortcut("3", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab4Command) {
+                editor?.selectTab(atShortcutNumber: 4)
+            }
+            .keyboardShortcut("4", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab5Command) {
+                editor?.selectTab(atShortcutNumber: 5)
+            }
+            .keyboardShortcut("5", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab6Command) {
+                editor?.selectTab(atShortcutNumber: 6)
+            }
+            .keyboardShortcut("6", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab7Command) {
+                editor?.selectTab(atShortcutNumber: 7)
+            }
+            .keyboardShortcut("7", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab8Command) {
+                editor?.selectTab(atShortcutNumber: 8)
+            }
+            .keyboardShortcut("8", modifiers: .command)
+            .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
+
+            Button(AppText.selectTab9Command) {
+                editor?.selectTab(atShortcutNumber: 9)
+            }
+            .keyboardShortcut("9", modifiers: .command)
             .disabled(editor?.canCloseCommandTarget != true || editorRuntimeStore == nil)
         }
 

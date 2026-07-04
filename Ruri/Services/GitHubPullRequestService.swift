@@ -38,7 +38,8 @@ nonisolated struct GitHubPullRequestService: GitHubPullRequestServiceProtocol, S
         openedRootURL: URL
     ) async -> GitHubPullRequestStatus? {
         let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBranchName.isEmpty else { return nil }
+        // "-" 始まりのref名はghにフラグとして解釈されるため、位置引数として渡さない。
+        guard !trimmedBranchName.isEmpty, !trimmedBranchName.hasPrefix("-") else { return nil }
 
         let result = await cliClient.runOptionalFeatureCommand(
             arguments: [

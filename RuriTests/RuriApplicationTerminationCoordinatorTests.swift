@@ -21,7 +21,7 @@ final class RuriApplicationTerminationCoordinatorTests: XCTestCase {
 
     func testAllowsTerminationWhenEditorHasNoOpenedProject() async {
         let coordinator = RuriApplicationTerminationCoordinator()
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         coordinator.register(editor)
         await Task.yield()
@@ -38,7 +38,7 @@ final class RuriApplicationTerminationCoordinatorTests: XCTestCase {
             confirmationCount += 1
             return false
         }
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         coordinator.register(editor)
@@ -56,7 +56,7 @@ final class RuriApplicationTerminationCoordinatorTests: XCTestCase {
             confirmationCount += 1
             return true
         }
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         coordinator.register(editor)
@@ -74,7 +74,7 @@ final class RuriApplicationTerminationCoordinatorTests: XCTestCase {
             confirmationCount += 1
             return false
         }
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         coordinator.register(editor)
@@ -85,9 +85,6 @@ final class RuriApplicationTerminationCoordinatorTests: XCTestCase {
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory
-            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 }

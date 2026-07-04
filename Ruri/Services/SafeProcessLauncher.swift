@@ -26,6 +26,23 @@ nonisolated enum SafeProcessLauncher {
         try catchObjectiveCException(block)
     }
 
+    /// SIGTERMを無視する子プロセスがスレッドごと残らないよう、猶予後にSIGKILLへ
+    /// エスカレーションしてから終了を待つ。呼び出しスレッドを最大gracePeriodブロックする。
+    static func terminateWithEscalation(_ process: Process, gracePeriod: TimeInterval = 5) {
+        guard process.isRunning else { return }
+        process.terminate()
+
+        let deadline = Date().addingTimeInterval(gracePeriod)
+        while process.isRunning && Date() < deadline {
+            usleep(50_000)
+        }
+
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+    }
+
     private static func catchObjectiveCException(_ block: () throws -> Void) throws {
         var swiftError: Error?
         do {

@@ -109,7 +109,7 @@ struct ProjectFileSearchOverlay: View {
         }
     }
 
-    private func resultRow(_ result: ProjectFileSearchEntry) -> some View {
+    private func resultRow(_ result: ProjectFileSearchResult) -> some View {
         Button {
             open(result)
         } label: {
@@ -120,12 +120,20 @@ struct ProjectFileSearchOverlay: View {
                     .frame(width: 20)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(result.fileName)
+                    Text(highlightedText(
+                        result.entry.fileName,
+                        matchOffsets: result.fileNameMatchOffsets,
+                        highlightFont: .system(size: 13, weight: .semibold)
+                    ))
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
 
-                    Text(result.displayParentPath)
+                    Text(highlightedText(
+                        result.entry.displayParentPath,
+                        matchOffsets: result.parentPathMatchOffsets,
+                        highlightFont: .system(size: 11, weight: .medium)
+                    ))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -159,10 +167,35 @@ struct ProjectFileSearchOverlay: View {
         .frame(height: 46)
     }
 
-    private func selectionBackground(for result: ProjectFileSearchEntry) -> some View {
+    // マッチ文字だけ色と太さを変える。サイズ等は外側の .font() を継承させる
+    private func highlightedText(
+        _ text: String,
+        matchOffsets: [Int],
+        highlightFont: Font
+    ) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard !matchOffsets.isEmpty else { return attributed }
+
+        let offsets = Set(matchOffsets)
+        var characterOffset = 0
+        var index = attributed.startIndex
+        while index < attributed.endIndex {
+            let nextIndex = attributed.index(afterCharacter: index)
+            if offsets.contains(characterOffset) {
+                attributed[index..<nextIndex].foregroundColor = .accentColor
+                attributed[index..<nextIndex].font = highlightFont
+            }
+            characterOffset += 1
+            index = nextIndex
+        }
+
+        return attributed
+    }
+
+    private func selectionBackground(for result: ProjectFileSearchResult) -> some View {
         let fill: Color = result.id == viewModel.selectedResultID
             ? Color.accentColor.opacity(0.18)
-            : (result.isInTestDirectory ? Color.green.opacity(0.18) : Color.clear)
+            : (result.entry.isInTestDirectory ? Color.green.opacity(0.18) : Color.clear)
 
         return RoundedRectangle(cornerRadius: 6)
             .fill(fill)
@@ -194,9 +227,9 @@ struct ProjectFileSearchOverlay: View {
         .frame(width: 0, height: 0)
     }
 
-    private func open(_ result: ProjectFileSearchEntry) {
+    private func open(_ result: ProjectFileSearchResult) {
         viewModel.dismiss()
-        openFile(result.url)
+        openFile(result.entry.url)
     }
 }
 
@@ -410,14 +443,4 @@ struct DoubleShiftKeySequence {
     mutating func cancelPendingShift() {
         lastShiftDownTimestamp = nil
     }
-}
-
-private enum KeyCode {
-    static let returnKey: UInt16 = 36
-    static let keypadEnter: UInt16 = 76
-    static let escape: UInt16 = 53
-    static let leftShift: UInt16 = 56
-    static let rightShift: UInt16 = 60
-    static let downArrow: UInt16 = 125
-    static let upArrow: UInt16 = 126
 }

@@ -6,6 +6,8 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Representable
+
 struct EditorPaneHostView: NSViewControllerRepresentable {
     let state: EditorPaneHostState
     let actions: EditorPaneHostActions
@@ -43,6 +45,8 @@ struct EditorPaneHostView: NSViewControllerRepresentable {
         return CGSize(width: width, height: height)
     }
 }
+
+// MARK: - Pane View Controller
 
 @MainActor
 final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDelegate, NSSplitViewDelegate {
@@ -365,6 +369,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         updateFindBar(for: runtime)
     }
 
+    // MARK: - Split View Delegate
+
     func splitView(
         _ splitView: NSSplitView,
         constrainMinCoordinate proposedMinimumPosition: CGFloat,
@@ -400,6 +406,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         }
     }
 
+    // MARK: - Runtime Delegate
+
     func editorDocumentRuntime(_ runtime: EditorDocumentRuntime, didChangeText text: String) {
         guard let tabID = tabID(for: runtime) else { return }
         updateText?(text, tabID)
@@ -434,6 +442,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         guard let tabID = tabID(for: runtime) else { return }
         blurEditor?(tabID)
     }
+
+    // MARK: - Focus & Activation
 
     private func scheduleEditorFocus(_ tabID: EditorTab.ID, for runtime: EditorDocumentRuntime) {
         DispatchQueue.main.async { [weak self, weak runtime] in
@@ -480,6 +490,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
 
         return await implementationHoverRange?(tabID, utf16Offset)
     }
+
+    // MARK: - Find Bar Coordination
 
     private func configureFindBarCallbacks() {
         findBarView.onQueryChanged = { [weak self] query in
@@ -555,6 +567,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         findBarView.update(findState: runtime.findState)
     }
 
+    // MARK: - Tab & Terminal Panel Updates
+
     private func updateTabBar() {
         tabBarView.update(
             tabs: tabs,
@@ -626,6 +640,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             window.makeFirstResponder(selectedTerminalView)
         }
     }
+
+    // MARK: - Body Content Presentation
 
     private func showRuntime(
         _ runtime: EditorDocumentRuntime,
@@ -751,6 +767,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         ])
     }
 
+    // MARK: - Chrome & Status Bar
+
     private func setEditorChromeVisibility(hasOpenTab: Bool) {
         tabBarView.isHidden = !hasOpenTab
         tabSeparator.isHidden = !hasOpenTab
@@ -851,6 +869,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         separator.translatesAutoresizingMaskIntoConstraints = false
     }
 
+    // MARK: - Terminal Split Layout
+
     private func setTerminalPanelVisible(_ isVisible: Bool) {
         if isVisible {
             guard terminalPanelView.superview !== splitView else { return }
@@ -903,220 +923,15 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     }
 }
 
+// MARK: - Root AppKit View
+
 private final class EditorPaneRootAppKitView: NSView {
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 }
 
-private struct TerminalStatusBarState: Equatable {
-    let tabCount: Int
-    let isMinimized: Bool
-    let isEnabled: Bool
-
-    var title: String {
-        "Terminal \(tabCount)"
-    }
-
-    var toolTip: String {
-        guard isEnabled else {
-            return "Open a folder to use the terminal."
-        }
-
-        let action = isMinimized ? "Show" : "Hide"
-        return "\(action) Terminal (\(tabCount) open)"
-    }
-}
-
-private struct GitStatusBarState: Equatable {
-    let title: String?
-    let toolTip: String?
-    let accessibilityValue: String
-    let branches: [GitStatusBarBranchState]
-    let canSwitchBranch: Bool
-
-    init(status: GitRepositoryStatus) {
-        switch status {
-        case .inactive:
-            title = nil
-            toolTip = nil
-            accessibilityValue = ""
-            branches = []
-            canSwitchBranch = false
-
-        case .checking:
-            title = "Git"
-            toolTip = "Checking Git repository status."
-            accessibilityValue = "Checking Git repository status"
-            branches = []
-            canSwitchBranch = false
-
-        case .notRepository(let url):
-            title = "No Git"
-            toolTip = "\(url.lastPathComponent) is not in a Git repository."
-            accessibilityValue = "Not a Git repository"
-            branches = []
-            canSwitchBranch = false
-
-        case .repository(let snapshot):
-            if snapshot.isRuriStyleWorktree {
-                title = "\(snapshot.branch.displayName) (worktree)"
-                toolTip = "\(snapshot.branch.detail)\nruri-style worktree: \(snapshot.worktreeRootURL.path(percentEncoded: false))"
-                accessibilityValue = "\(snapshot.branch.displayName), ruri-style worktree"
-                branches = snapshot.localBranches.map { branch in
-                    GitStatusBarBranchState(
-                        name: branch.name,
-                        isCurrent: branch.name == snapshot.branch.displayName,
-                        checkedOutWorktreeURL: branch.checkedOutWorktreeURL,
-                        currentWorktreeURL: snapshot.worktreeRootURL
-                    )
-                }
-                canSwitchBranch = true
-            } else {
-                branches = []
-                canSwitchBranch = false
-
-                switch snapshot.worktreeKind {
-                case .main:
-                    if snapshot.hasOtherWorktrees {
-                        title = "\(snapshot.branch.displayName) Worktree Root"
-                        toolTip = "\(snapshot.branch.detail)\nWorktree root: \(snapshot.worktreeRootURL.path(percentEncoded: false))"
-                        accessibilityValue = "\(snapshot.branch.displayName), worktree root"
-                    } else {
-                        title = snapshot.branch.displayName
-                        toolTip = snapshot.branch.detail
-                        accessibilityValue = snapshot.branch.displayName
-                    }
-
-                case .linked:
-                    title = "\(snapshot.branch.displayName) Worktree"
-                    toolTip = "\(snapshot.branch.detail)\nLinked worktree: \(snapshot.worktreeRootURL.path(percentEncoded: false))"
-                    accessibilityValue = "\(snapshot.branch.displayName), linked worktree"
-                }
-            }
-        }
-    }
-}
-
-private enum GitHubStatusBarAction: Equatable {
-    case logIn
-    case refresh
-}
-
-private enum GitHubStatusBarTint: Equatable {
-    case primary
-    case secondary
-    case tertiary
-    case red
-}
-
-private struct GitHubStatusBarState: Equatable {
-    let title: String
-    let toolTip: String
-    let accessibilityValue: String
-    let action: GitHubStatusBarAction?
-    let tint: GitHubStatusBarTint
-
-    init(status: GitHubAuthStatusState) {
-        switch status {
-        case .checking:
-            title = "GitHub"
-            toolTip = "Checking GitHub authentication."
-            accessibilityValue = "Checking GitHub authentication"
-            action = nil
-            tint = .secondary
-
-        case .authenticating:
-            title = "GitHub"
-            toolTip = "Starting GitHub login."
-            accessibilityValue = "Starting GitHub login"
-            action = nil
-            tint = .secondary
-
-        case .authenticated(let username):
-            title = "@\(username)"
-            toolTip = "Logged in to GitHub as \(username)."
-            accessibilityValue = "Logged in to GitHub as \(username)"
-            action = nil
-            tint = .primary
-
-        case .unauthenticated:
-            title = "GitHub Login"
-            toolTip = "Log in to GitHub with GitHub CLI."
-            accessibilityValue = "Not logged in to GitHub"
-            action = .logIn
-            tint = .secondary
-
-        case .unavailable(let message):
-            title = "No gh"
-            toolTip = message
-            accessibilityValue = message
-            action = nil
-            tint = .tertiary
-
-        case .failed(let message):
-            title = "GitHub Error"
-            toolTip = "\(message)\nClick to retry."
-            accessibilityValue = "GitHub authentication failed"
-            action = .refresh
-            tint = .red
-        }
-    }
-}
-
-private struct GitHubPullRequestStatusBarState: Equatable {
-    let title: String
-    let toolTip: String
-    let accessibilityValue: String
-    let url: URL
-
-    init?(status: GitHubPullRequestStatus?) {
-        guard let status else { return nil }
-
-        switch status {
-        case .pullRequest(let pullRequest):
-            title = pullRequest.isDraft ? "\(pullRequest.displayTitle) Draft" : pullRequest.displayTitle
-            toolTip = "View pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)\n\(pullRequest.url.absoluteString)"
-            accessibilityValue = "Pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)"
-            url = pullRequest.url
-
-        case .create(let creationLink):
-            title = "Create PR"
-            toolTip = "Create pull request \(creationLink.headBranch) into \(creationLink.baseBranch)\n\(creationLink.url.absoluteString)"
-            accessibilityValue = "Create pull request"
-            url = creationLink.url
-        }
-    }
-}
-
-private struct GitStatusBarBranchState: Equatable {
-    let name: String
-    let isCurrent: Bool
-    let checkedOutWorktreeURL: URL?
-    let currentWorktreeURL: URL
-
-    var isCheckedOutInOtherWorktree: Bool {
-        guard let checkedOutWorktreeURL else { return false }
-        return !FileURLRewriter.urlsMatch(checkedOutWorktreeURL, currentWorktreeURL)
-    }
-
-    var isSelectable: Bool {
-        !isCheckedOutInOtherWorktree
-    }
-
-    var toolTip: String {
-        if isCurrent {
-            return "Current branch"
-        }
-
-        if let checkedOutWorktreeURL,
-           isCheckedOutInOtherWorktree {
-            return "Already checked out at \(checkedOutWorktreeURL.path(percentEncoded: false))"
-        }
-
-        return "Switch to \(name)"
-    }
-}
+// MARK: - Body Container View
 
 private final class EditorBodyContainerAppKitView: NSView {
     override init(frame frameRect: NSRect) {
@@ -1130,6 +945,8 @@ private final class EditorBodyContainerAppKitView: NSView {
         nil
     }
 }
+
+// MARK: - Find Bar Commands
 
 enum EditorFindBarControlRole {
     case search
@@ -1167,6 +984,8 @@ enum EditorFindBarCommandAction: Equatable {
         return nil
     }
 }
+
+// MARK: - Find Bar View
 
 private final class EditorFindBarAppKitView: NSView, NSSearchFieldDelegate, NSTextFieldDelegate {
     var onQueryChanged: ((String) -> Void)?
@@ -1492,6 +1311,8 @@ private final class EditorFindBarAppKitView: NSView, NSSearchFieldDelegate, NSTe
     }
 }
 
+// MARK: - Tab Bar View
+
 private final class EditorTabBarView: NSView {
     private let scrollView = NSScrollView()
     private let contentView = NSView()
@@ -1569,6 +1390,8 @@ private final class EditorTabBarView: NSView {
         ])
     }
 }
+
+// MARK: - Tab Item View
 
 private final class EditorTabItemAppKitView: NSView, NSDraggingSource {
     private static let tabPasteboardType = NSPasteboard.PasteboardType("net.mizucoffee.ruri.editor-tab-id")
@@ -1787,6 +1610,8 @@ private final class EditorTabItemAppKitView: NSView, NSDraggingSource {
         return image
     }
 }
+
+// MARK: - Status Bar View
 
 private final class EditorStatusBarAppKitView: NSView {
     private let backgroundView = NSVisualEffectView()
@@ -2030,6 +1855,8 @@ private final class EditorStatusBarAppKitView: NSView {
         ])
     }
 
+    // MARK: - Status Bar Button Updates
+
     private func updateTerminalButton(_ terminalStatus: TerminalStatusBarState) {
         guard self.terminalStatus != terminalStatus else { return }
 
@@ -2162,6 +1989,8 @@ private final class EditorStatusBarAppKitView: NSView {
             .systemRed
         }
     }
+
+    // MARK: - Status Bar Menus & Actions
 
     private func rebuildLanguageMenu() {
         isUpdating = true
@@ -2319,6 +2148,8 @@ private final class EditorStatusBarAppKitView: NSView {
     }
 }
 
+// MARK: - Dirty Indicator View
+
 private final class DirtyIndicatorAppKitView: NSView {
     var hasUnsavedChanges = false {
         didSet {
@@ -2363,6 +2194,8 @@ private final class DirtyIndicatorAppKitView: NSView {
         }
     }
 }
+
+// MARK: - Empty State View
 
 private final class EditorEmptyAppKitView: NSView {
     private let imageView = NSImageView()

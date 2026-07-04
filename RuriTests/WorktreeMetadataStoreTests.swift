@@ -142,8 +142,6 @@ final class WorktreeMetadataStoreTests: XCTestCase {
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 }

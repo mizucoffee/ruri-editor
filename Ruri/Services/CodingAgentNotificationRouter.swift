@@ -14,11 +14,11 @@ final class CodingAgentNotificationRouter {
 
     private init() {}
 
-    func register(editor: EditorState, terminalState: TerminalState) {
+    func register(editor: EditorViewModel, terminalState: TerminalViewModel) {
         register(editor: editor, terminalState: terminalState, window: nil)
     }
 
-    func register(editor: EditorState, terminalState: TerminalState, window: NSWindow?) {
+    func register(editor: EditorViewModel, terminalState: TerminalViewModel, window: NSWindow?) {
         pruneRegistrations()
         if let existing = registrations.first(where: { $0.editor === editor && $0.terminalState === terminalState }) {
             if let window {
@@ -36,7 +36,7 @@ final class CodingAgentNotificationRouter {
         )
     }
 
-    func unregister(terminalState: TerminalState) {
+    func unregister(terminalState: TerminalViewModel) {
         registrations.removeAll { $0.terminalState == nil || $0.terminalState === terminalState }
     }
 
@@ -78,11 +78,11 @@ final class CodingAgentNotificationRouter {
 }
 
 private final class WeakCodingAgentNotificationTarget {
-    weak var editor: EditorState?
-    weak var terminalState: TerminalState?
+    weak var editor: EditorViewModel?
+    weak var terminalState: TerminalViewModel?
     weak var window: NSWindow?
 
-    init(editor: EditorState, terminalState: TerminalState, window: NSWindow?) {
+    init(editor: EditorViewModel, terminalState: TerminalViewModel, window: NSWindow?) {
         self.editor = editor
         self.terminalState = terminalState
         self.window = window

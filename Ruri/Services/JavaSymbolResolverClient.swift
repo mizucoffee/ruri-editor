@@ -45,6 +45,7 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
     func resolve(_ request: JavaSymbolResolverRequest) async throws -> JavaSymbolResolverResponse {
         try await ensureStarted()
         idleShutdownTask?.cancel()
+        defer { scheduleIdleShutdown() }
 
         let id = UUID().uuidString
         let envelope = RequestEnvelope(id: id, payload: request)
@@ -62,6 +63,12 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: UInt64(self.timeout * 1_000_000_000))
+                    // TaskGroupはcontinuation待ちの子タスク完了を待つため、pendingを
+                    // 解放しないとタイムアウトしてもresolve全体が返らない。
+                    await self.failPending(
+                        id: id,
+                        error: JavaSymbolResolverError(message: "Java symbol resolver timed out.")
+                    )
                     throw JavaSymbolResolverError(message: "Java symbol resolver timed out.")
                 }
 
@@ -69,7 +76,6 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
                     throw JavaSymbolResolverError(message: "Java symbol resolver did not return a response.")
                 }
                 group.cancelAll()
-                await scheduleIdleShutdown()
                 return result
             }
         } onCancel: {
@@ -107,7 +113,11 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
     }
 
     private func cancelPending(id: String) {
-        pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        failPending(id: id, error: CancellationError())
+    }
+
+    private func failPending(id: String, error: Error) {
+        pending.removeValue(forKey: id)?.resume(throwing: error)
     }
 
     private func ensureStarted() throws {
@@ -201,9 +211,8 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
                 )
             }
         } catch {
-            let message = "Java symbol resolver returned invalid JSON: \(error.localizedDescription)"
-            pending.values.forEach { $0.resume(throwing: JavaSymbolResolverError(message: message)) }
-            pending.removeAll()
+            // 対応するidを特定できない行は読み飛ばす。JVM由来の警告行などの混入で
+            // 無関係なpendingまで破棄しない。該当要求自体はタイムアウトで解放される。
         }
     }
 
@@ -217,8 +226,12 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
     private func stopProcess(error: Error) {
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
-        if process?.isRunning == true {
-            process?.terminate()
+        if let process, process.isRunning {
+            // SIGTERMを無視するJVMが残らないようSIGKILLへエスカレーションする。
+            // 待ちでactorをブロックしないよう別スレッドで行う。
+            Task.detached(priority: .utility) {
+                SafeProcessLauncher.terminateWithEscalation(process)
+            }
         }
         process = nil
         stdinPipe = nil
@@ -259,9 +272,11 @@ nonisolated struct JavaExecutableResolver: Sendable {
     var environment: [String: String] = ProcessInfo.processInfo.environment
 
     func executableURL(named executableName: String = "java") -> URL? {
+        // フォールバック順はgit/ghの実行ファイル解決と同じHomebrew優先に揃える。
+        // /usr/binを先にするとJDK未導入機でAppleのスタブjavaを掴んでしまう。
         let searchDirectories = (environment["PATH"] ?? "")
             .split(separator: ":")
-            .map(String.init) + ["/usr/bin", "/opt/homebrew/bin", "/usr/local/bin"]
+            .map(String.init) + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
         var seen = Set<String>()
 
         for directory in searchDirectories where seen.insert(directory).inserted {

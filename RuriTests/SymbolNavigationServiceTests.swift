@@ -52,7 +52,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try "class Target {}\n".write(to: targetURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -81,7 +81,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let sourceText = "class Target {}\nclass Source { Target target; }\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -110,7 +110,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let sourceText = "class Lonely {}\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -136,7 +136,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let sourceText = "class Source { Missing missing; }\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -187,7 +187,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         try targetText.write(to: targetURL, atomically: true, encoding: .utf8)
         try "package app;\nclass UserService {}\n".write(to: otherURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -218,7 +218,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let unsavedText = "class Target {}\nclass Source { Target editedTarget; }\n"
         try savedText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -259,7 +259,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         """
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -295,7 +295,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try oldTargetText.write(to: targetURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -333,7 +333,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try "class Generated {}\n".write(to: generatedURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -363,7 +363,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let sourceText = "class Source { IgnoredTarget target; }\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -399,7 +399,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try "class Target {}\n".write(to: targetURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -450,7 +450,7 @@ final class SymbolNavigationServiceTests: XCTestCase {
         let sourceText = "class Source { Target target; }\n"
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let service = SymbolNavigationService()
+        let service = try makeJavaBackedService()
         service.startIndexing(projectURL: rootURL)
         try await waitForReady(service, projectURL: rootURL)
 
@@ -511,21 +511,29 @@ final class SymbolNavigationServiceTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        for _ in 0..<50 {
+        try await TestSupport.waitUntil("symbol index readiness", file: file, line: line) {
             if case .ready = service.currentStatus(for: projectURL) {
-                return
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
+        }
+    }
+
+    private func makeJavaBackedService() throws -> SymbolNavigationService {
+        guard JavaExecutableResolver().executableURL() != nil else {
+            throw XCTSkip("java executable is not available")
         }
 
-        XCTFail("Timed out waiting for symbol index readiness.", file: file, line: line)
+        guard JavaSymbolResolverBundle().jarURL() != nil else {
+            throw XCTSkip("bundled java-symbol-resolver.jar is not available (run Scripts/build-java-symbol-resolver.sh)")
+        }
+
+        return SymbolNavigationService()
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 }
 

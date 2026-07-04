@@ -6,6 +6,8 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Review Diff Root View
+
 struct ReviewDiffView: View {
     let state: ReviewDiffState
     let selectedBase: GitReviewDiffBase?
@@ -203,6 +205,8 @@ struct ReviewDiffView: View {
     }
 }
 
+// MARK: - Display Mode
+
 enum ReviewDiffDisplayMode: String, CaseIterable, Identifiable {
     case unified
     case sideBySide
@@ -220,6 +224,8 @@ enum ReviewDiffDisplayMode: String, CaseIterable, Identifiable {
         }
     }
 }
+
+// MARK: - Base Picker
 
 private struct ReviewDiffBasePicker: View {
     let selectedBase: GitReviewDiffBase?
@@ -413,6 +419,8 @@ private struct ReviewDiffBasePicker: View {
     }
 }
 
+// MARK: - Base Row, Summary & Messages
+
 private struct ReviewDiffBaseRow: View {
     let title: String
     let subtitle: String
@@ -495,6 +503,8 @@ private struct ReviewDiffMessageView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+// MARK: - File View
 
 private struct ReviewDiffFileView: View {
     let file: GitReviewFileDiff
@@ -654,6 +664,8 @@ private struct ReviewDiffFileView: View {
     }
 }
 
+// MARK: - Status Badge
+
 private struct ReviewDiffStatusBadge: View {
     let status: GitFileDisplayStatus
 
@@ -682,57 +694,7 @@ private struct ReviewDiffStatusBadge: View {
     }
 }
 
-enum ReviewDiffSyntaxSide: Hashable, Sendable {
-    case old
-    case new
-}
-
-struct ReviewDiffLineKey: Hashable, Sendable {
-    let hunkIndex: Int
-    let lineIndex: Int
-    let side: ReviewDiffSyntaxSide
-}
-
-struct ReviewDiffSyntaxSegment: Equatable, Sendable {
-    let text: String
-    let role: SyntaxHighlightRole?
-}
-
-struct ReviewDiffSyntaxLine: Equatable, Sendable {
-    let segments: [ReviewDiffSyntaxSegment]
-}
-
-struct ReviewDiffSyntaxHighlights: Sendable {
-    static let empty = ReviewDiffSyntaxHighlights(
-        requestID: nil,
-        linesByKey: [:],
-        themeName: "tree-sitter-light"
-    )
-
-    let requestID: Int?
-    let linesByKey: [ReviewDiffLineKey: ReviewDiffSyntaxLine]
-    let themeName: String
-
-    func matching(requestID: Int) -> ReviewDiffSyntaxHighlights {
-        self.requestID == requestID ? self : .empty
-    }
-
-    func line(for key: ReviewDiffLineKey) -> ReviewDiffSyntaxLine? {
-        linesByKey[key]
-    }
-
-    func line(
-        hunkIndex: Int,
-        lineIndex: Int,
-        side: ReviewDiffSyntaxSide,
-        fallbackSide: ReviewDiffSyntaxSide? = nil
-    ) -> ReviewDiffSyntaxLine? {
-        line(for: ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: side))
-            ?? fallbackSide.flatMap {
-                line(for: ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: $0))
-            }
-    }
-}
+// MARK: - Syntax Highlighting
 
 private enum ReviewDiffSyntaxHighlighter {
     static func highlights(
@@ -913,6 +875,8 @@ private enum ReviewDiffSyntaxHighlighter {
     }
 }
 
+// MARK: - Syntax Document Model
+
 private struct ReviewDiffSyntaxDocument: Sendable {
     struct Line: Sendable {
         let key: ReviewDiffLineKey
@@ -937,13 +901,9 @@ private extension SourceDiffLine.Kind {
     }
 }
 
-private extension SourceDiffLine {
-    var unifiedSyntaxSide: ReviewDiffSyntaxSide {
-        kind == .deletion ? .old : .new
-    }
-}
+// MARK: - Layout Metrics
 
-private enum ReviewDiffLayout {
+enum ReviewDiffLayout {
     static let minimumContentWidth: CGFloat = 760
     static let codeFontSize: CGFloat = 12
     static let lineNumberWidth: CGFloat = 52
@@ -982,393 +942,7 @@ private enum ReviewDiffLayout {
     }
 }
 
-struct ReviewDiffRenderedDocument: Equatable {
-    enum Pane: Equatable {
-        case unified
-        case old
-        case new
-
-        var gutterColumnCount: Int {
-            switch self {
-            case .unified:
-                2
-            case .old, .new:
-                1
-            }
-        }
-    }
-
-    static let empty = ReviewDiffRenderedDocument(
-        pane: .unified,
-        text: " ",
-        lines: [
-            ReviewDiffRenderedLine(
-                kind: .placeholder,
-                oldLineNumber: nil,
-                newLineNumber: nil,
-                marker: " ",
-                contentRange: NSRange(location: 0, length: 1),
-                sourceContentUTF16Length: 0,
-                sourceFileURL: nil,
-                navigationSide: nil,
-                sourceLineNumber: nil,
-                syntaxKey: nil,
-                fallbackSyntaxKey: nil
-            )
-        ],
-        maximumCodeWidth: ReviewDiffLayout.codeWidth(for: " ")
-    )
-
-    let pane: Pane
-    let text: String
-    let lines: [ReviewDiffRenderedLine]
-    let maximumCodeWidth: CGFloat
-
-    var lineCount: Int {
-        lines.count
-    }
-
-    static func unified(
-        file: GitReviewFileDiff,
-        oldFileURL: URL?,
-        newFileURL: URL?
-    ) -> ReviewDiffRenderedDocument {
-        var builder = ReviewDiffRenderedDocumentBuilder(pane: .unified)
-
-        for (hunkIndex, hunk) in file.diff.hunks.enumerated() {
-            builder.appendHunkHeader(hunk)
-
-            for (lineIndex, line) in hunk.lines.enumerated() {
-                let syntaxSide = line.unifiedSyntaxSide
-                let fallbackSyntaxSide: ReviewDiffSyntaxSide? = syntaxSide == .new ? .old : .new
-                let fileURL = line.kind == .deletion ? oldFileURL : newFileURL
-                let lineNumber = line.kind == .deletion ? line.oldLineNumber : line.newLineNumber
-                builder.appendCodeLine(
-                    content: line.content,
-                    kind: ReviewDiffRenderedLine.Kind(line.kind),
-                    oldLineNumber: line.oldLineNumber,
-                    newLineNumber: line.newLineNumber,
-                    marker: line.unifiedMarker,
-                    sourceFileURL: fileURL,
-                    navigationSide: line.kind == .deletion ? .old : .new,
-                    sourceLineNumber: lineNumber,
-                    syntaxKey: ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: syntaxSide),
-                    fallbackSyntaxKey: fallbackSyntaxSide.map {
-                        ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: $0)
-                    }
-                )
-            }
-        }
-
-        return builder.build()
-    }
-
-    static func sideBySide(
-        file: GitReviewFileDiff,
-        side: ReviewDiffSyntaxSide,
-        fileURL: URL?
-    ) -> ReviewDiffRenderedDocument {
-        var builder = ReviewDiffRenderedDocumentBuilder(pane: side == .old ? .old : .new)
-
-        for (hunkIndex, hunk) in file.diff.hunks.enumerated() {
-            builder.appendHunkHeader(hunk)
-
-            for row in ReviewDiffSideBySideRenderedRow.rows(hunkIndex: hunkIndex, lines: hunk.lines) {
-                let indexedLine = side == .old ? row.oldLine : row.newLine
-                guard let indexedLine else {
-                    builder.appendPlaceholder()
-                    continue
-                }
-
-                let line = indexedLine.line
-                let lineNumber = side == .old ? line.oldLineNumber : line.newLineNumber
-                builder.appendCodeLine(
-                    content: line.content,
-                    kind: ReviewDiffRenderedLine.Kind(line.kind),
-                    oldLineNumber: side == .old ? line.oldLineNumber : nil,
-                    newLineNumber: side == .new ? line.newLineNumber : nil,
-                    marker: line.marker(for: side),
-                    sourceFileURL: fileURL,
-                    navigationSide: side == .old ? .old : .new,
-                    sourceLineNumber: lineNumber,
-                    syntaxKey: ReviewDiffLineKey(
-                        hunkIndex: indexedLine.hunkIndex,
-                        lineIndex: indexedLine.lineIndex,
-                        side: side
-                    ),
-                    fallbackSyntaxKey: nil
-                )
-            }
-        }
-
-        return builder.build()
-    }
-
-    func line(containingUTF16Location location: Int) -> ReviewDiffRenderedLine? {
-        guard !lines.isEmpty else { return nil }
-
-        let clampedLocation = min(max(0, location), text.utf16.count)
-        var lowerBound = 0
-        var upperBound = lines.count - 1
-
-        while lowerBound <= upperBound {
-            let middle = (lowerBound + upperBound) / 2
-            let line = lines[middle]
-            let lineStart = line.contentRange.location
-            let lineEnd = NSMaxRange(line.contentRange)
-
-            if clampedLocation < lineStart {
-                upperBound = middle - 1
-            } else if clampedLocation > lineEnd {
-                lowerBound = middle + 1
-            } else {
-                return line
-            }
-        }
-
-        return lines.last { $0.contentRange.location <= clampedLocation }
-    }
-}
-
-struct ReviewDiffRenderedLine: Equatable {
-    enum Kind: Equatable {
-        case hunkHeader
-        case context
-        case addition
-        case deletion
-        case placeholder
-    }
-
-    let kind: Kind
-    let oldLineNumber: Int?
-    let newLineNumber: Int?
-    let marker: String
-    let contentRange: NSRange
-    let sourceContentUTF16Length: Int
-    let sourceFileURL: URL?
-    let navigationSide: ReviewDiffCodeNavigationSide?
-    let sourceLineNumber: Int?
-    let syntaxKey: ReviewDiffLineKey?
-    let fallbackSyntaxKey: ReviewDiffLineKey?
-
-    var canNavigate: Bool {
-        sourceFileURL != nil && navigationSide != nil && sourceLineNumber != nil
-    }
-
-    func navigationRequest(atUTF16Location location: Int) -> ReviewDiffCodeNavigationRequest? {
-        guard let sourceFileURL,
-              let navigationSide,
-              let sourceLineNumber else {
-            return nil
-        }
-
-        let column = min(
-            max(0, location - contentRange.location),
-            sourceContentUTF16Length
-        )
-        return ReviewDiffCodeNavigationRequest(
-            fileURL: sourceFileURL,
-            side: navigationSide,
-            lineNumber: sourceLineNumber,
-            utf16Column: column
-        )
-    }
-}
-
-private struct ReviewDiffRenderedDocumentBuilder {
-    private(set) var text = ""
-    private(set) var lines: [ReviewDiffRenderedLine] = []
-    private var maximumCodeWidth = ReviewDiffLayout.codeWidth(for: " ")
-    private let pane: ReviewDiffRenderedDocument.Pane
-
-    init(pane: ReviewDiffRenderedDocument.Pane) {
-        self.pane = pane
-    }
-
-    mutating func appendHunkHeader(_ hunk: SourceDiffHunk) {
-        appendLine(
-            content: "@@ -\(hunk.oldStart),\(hunk.oldLineCount) +\(hunk.newStart),\(hunk.newLineCount) @@",
-            kind: .hunkHeader,
-            oldLineNumber: nil,
-            newLineNumber: nil,
-            marker: " ",
-            sourceContentUTF16Length: 0,
-            sourceFileURL: nil,
-            navigationSide: nil,
-            sourceLineNumber: nil,
-            syntaxKey: nil,
-            fallbackSyntaxKey: nil
-        )
-    }
-
-    mutating func appendPlaceholder() {
-        appendLine(
-            content: "",
-            kind: .placeholder,
-            oldLineNumber: nil,
-            newLineNumber: nil,
-            marker: " ",
-            sourceContentUTF16Length: 0,
-            sourceFileURL: nil,
-            navigationSide: nil,
-            sourceLineNumber: nil,
-            syntaxKey: nil,
-            fallbackSyntaxKey: nil
-        )
-    }
-
-    mutating func appendCodeLine(
-        content: String,
-        kind: ReviewDiffRenderedLine.Kind,
-        oldLineNumber: Int?,
-        newLineNumber: Int?,
-        marker: String,
-        sourceFileURL: URL?,
-        navigationSide: ReviewDiffCodeNavigationSide?,
-        sourceLineNumber: Int?,
-        syntaxKey: ReviewDiffLineKey?,
-        fallbackSyntaxKey: ReviewDiffLineKey?
-    ) {
-        appendLine(
-            content: content,
-            kind: kind,
-            oldLineNumber: oldLineNumber,
-            newLineNumber: newLineNumber,
-            marker: marker,
-            sourceContentUTF16Length: content.utf16.count,
-            sourceFileURL: sourceFileURL,
-            navigationSide: navigationSide,
-            sourceLineNumber: sourceLineNumber,
-            syntaxKey: syntaxKey,
-            fallbackSyntaxKey: fallbackSyntaxKey
-        )
-    }
-
-    mutating func build() -> ReviewDiffRenderedDocument {
-        if lines.isEmpty {
-            appendPlaceholder()
-        }
-
-        return ReviewDiffRenderedDocument(
-            pane: pane,
-            text: text,
-            lines: lines,
-            maximumCodeWidth: maximumCodeWidth
-        )
-    }
-
-    private mutating func appendLine(
-        content: String,
-        kind: ReviewDiffRenderedLine.Kind,
-        oldLineNumber: Int?,
-        newLineNumber: Int?,
-        marker: String,
-        sourceContentUTF16Length: Int,
-        sourceFileURL: URL?,
-        navigationSide: ReviewDiffCodeNavigationSide?,
-        sourceLineNumber: Int?,
-        syntaxKey: ReviewDiffLineKey?,
-        fallbackSyntaxKey: ReviewDiffLineKey?
-    ) {
-        if !text.isEmpty {
-            text += "\n"
-        }
-
-        let displayContent = content.isEmpty ? " " : content
-        let start = text.utf16.count
-        text += displayContent
-        let contentRange = NSRange(location: start, length: displayContent.utf16.count)
-        maximumCodeWidth = max(maximumCodeWidth, ReviewDiffLayout.codeWidth(for: displayContent))
-        lines.append(ReviewDiffRenderedLine(
-            kind: kind,
-            oldLineNumber: oldLineNumber,
-            newLineNumber: newLineNumber,
-            marker: marker,
-            contentRange: contentRange,
-            sourceContentUTF16Length: sourceContentUTF16Length,
-            sourceFileURL: sourceFileURL,
-            navigationSide: navigationSide,
-            sourceLineNumber: sourceLineNumber,
-            syntaxKey: syntaxKey,
-            fallbackSyntaxKey: fallbackSyntaxKey
-        ))
-    }
-}
-
-private struct ReviewIndexedDiffLine: Equatable {
-    let hunkIndex: Int
-    let lineIndex: Int
-    let line: SourceDiffLine
-}
-
-private struct ReviewDiffSideBySideRenderedRow: Equatable {
-    let oldLine: ReviewIndexedDiffLine?
-    let newLine: ReviewIndexedDiffLine?
-
-    static func rows(hunkIndex: Int, lines: [SourceDiffLine]) -> [ReviewDiffSideBySideRenderedRow] {
-        let indexedLines = lines.enumerated().map { lineIndex, line in
-            ReviewIndexedDiffLine(hunkIndex: hunkIndex, lineIndex: lineIndex, line: line)
-        }
-        var rows: [ReviewDiffSideBySideRenderedRow] = []
-        var index = 0
-
-        while index < indexedLines.count {
-            let indexedLine = indexedLines[index]
-            let line = indexedLine.line
-
-            if line.kind == .context {
-                rows.append(ReviewDiffSideBySideRenderedRow(oldLine: indexedLine, newLine: indexedLine))
-                index += 1
-                continue
-            }
-
-            if line.kind == .deletion {
-                var deletions: [ReviewIndexedDiffLine] = []
-                while index < indexedLines.count, indexedLines[index].line.kind == .deletion {
-                    deletions.append(indexedLines[index])
-                    index += 1
-                }
-
-                var additions: [ReviewIndexedDiffLine] = []
-                while index < indexedLines.count, indexedLines[index].line.kind == .addition {
-                    additions.append(indexedLines[index])
-                    index += 1
-                }
-
-                appendPairedRows(oldLines: deletions, newLines: additions, to: &rows)
-                continue
-            }
-
-            var additions: [ReviewIndexedDiffLine] = []
-            while index < indexedLines.count, indexedLines[index].line.kind == .addition {
-                additions.append(indexedLines[index])
-                index += 1
-            }
-            appendPairedRows(oldLines: [], newLines: additions, to: &rows)
-        }
-
-        return rows
-    }
-
-    private static func appendPairedRows(
-        oldLines: [ReviewIndexedDiffLine],
-        newLines: [ReviewIndexedDiffLine],
-        to rows: inout [ReviewDiffSideBySideRenderedRow]
-    ) {
-        let rowCount = max(oldLines.count, newLines.count)
-        for offset in 0..<rowCount {
-            rows.append(ReviewDiffSideBySideRenderedRow(
-                oldLine: line(at: offset, in: oldLines),
-                newLine: line(at: offset, in: newLines)
-            ))
-        }
-    }
-
-    private static func line(at index: Int, in lines: [ReviewIndexedDiffLine]) -> ReviewIndexedDiffLine? {
-        guard lines.indices.contains(index) else { return nil }
-        return lines[index]
-    }
-}
+// MARK: - File Content View
 
 private struct ReviewDiffFileContentView: View {
     let file: GitReviewFileDiff
@@ -1446,6 +1020,8 @@ private struct ReviewDiffFileContentView: View {
     }
 }
 
+// MARK: - Text Pane Representable
+
 private struct ReviewDiffTextPane: NSViewRepresentable {
     let document: ReviewDiffRenderedDocument
     let syntaxHighlights: ReviewDiffSyntaxHighlights
@@ -1468,9 +1044,77 @@ private struct ReviewDiffTextPane: NSViewRepresentable {
     }
 }
 
+// MARK: - Pane Scroll View
+
+private final class ReviewDiffPaneClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var constrainedBounds = super.constrainBoundsRect(proposedBounds)
+        constrainedBounds.origin.y = 0
+        return constrainedBounds
+    }
+}
+
+private final class ReviewDiffPaneScrollView: NSScrollView {
+    private var activeScrollWheelRoute: ReviewDiffScrollLayout.ScrollWheelRoute?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        contentView = ReviewDiffPaneClipView()
+        verticalScrollElasticity = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let phase = Self.eventPhase(for: event)
+        if phase == .gestureBegan {
+            activeScrollWheelRoute = nil
+        }
+
+        let route = ReviewDiffScrollLayout.scrollWheelRoute(
+            phase: phase,
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            canScrollHorizontally: ReviewDiffScrollLayout.canScrollHorizontally(
+                documentWidth: documentView?.frame.width ?? 0,
+                viewportWidth: contentView.bounds.width
+            ),
+            activeRoute: activeScrollWheelRoute
+        )
+        if phase != .discrete {
+            activeScrollWheelRoute = route
+        }
+
+        switch route {
+        case .pane:
+            super.scrollWheel(with: event)
+        case .parent, nil:
+            nextResponder?.scrollWheel(with: event)
+        }
+    }
+
+    private static func eventPhase(for event: NSEvent) -> ReviewDiffScrollLayout.ScrollWheelEventPhase {
+        if event.momentumPhase != [] {
+            return .momentum
+        }
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
+            return .gestureBegan
+        }
+        if event.phase != [] {
+            return .gestureActive
+        }
+        return .discrete
+    }
+}
+
+// MARK: - Text Pane AppKit View
+
 @MainActor
 private final class ReviewDiffTextPaneAppKitView: NSView {
-    private let scrollView = NSScrollView()
+    private let scrollView = ReviewDiffPaneScrollView()
     private let textView = ReviewDiffTextView()
     private let gutterView: ReviewDiffTextGutterView
     private var gutterWidthConstraint: NSLayoutConstraint?
@@ -1561,6 +1205,14 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         scrollView.autohidesScrollers = true
         scrollView.documentView = textView
 
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+
         textView.textContainerInset = ReviewDiffLayout.textContainerInset
         textView.minSize = .zero
         textView.maxSize = NSSize(
@@ -1641,6 +1293,10 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         invalidateIntrinsicContentSize()
     }
 
+    @objc private func clipViewBoundsDidChange(_ notification: Notification) {
+        gutterView.needsDisplay = true
+    }
+
     @discardableResult
     private func updateGutterWidth() -> CGFloat {
         let gutterWidth = gutterView.calculatedRuleThickness
@@ -1651,6 +1307,8 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
     }
 
 }
+
+// MARK: - Attributed String Builder
 
 enum ReviewDiffAttributedStringBuilder {
     static func attributedString(
@@ -1734,53 +1392,7 @@ enum ReviewDiffAttributedStringBuilder {
     }
 }
 
-enum ReviewDiffScrollLayout {
-    static let minimumMeasurableViewportWidth: CGFloat = 80
-
-    static func measurableViewportWidth(
-        totalWidth: CGFloat,
-        gutterWidth: CGFloat
-    ) -> CGFloat? {
-        let viewportWidth = totalWidth - gutterWidth
-        guard viewportWidth >= minimumMeasurableViewportWidth else {
-            return nil
-        }
-        return viewportWidth
-    }
-
-    static func textWidth(
-        viewportWidth: CGFloat,
-        documentCodeWidth: CGFloat,
-        textInsetWidth: CGFloat,
-        wrapLines: Bool
-    ) -> CGFloat {
-        guard !wrapLines else {
-            return viewportWidth
-        }
-
-        return max(viewportWidth, documentCodeWidth + textInsetWidth * 2)
-    }
-
-    static func estimatedDocumentHeight(
-        lineCount: Int,
-        lineHeight: CGFloat,
-        textInsetHeight: CGFloat
-    ) -> CGFloat {
-        max(lineHeight, CGFloat(max(1, lineCount)) * lineHeight + textInsetHeight * 2)
-    }
-
-    static func normalizedHorizontalOrigin(
-        currentOrigin: CGFloat,
-        documentWidth: CGFloat,
-        viewportWidth: CGFloat,
-        reset: Bool
-    ) -> CGFloat {
-        guard !reset else { return 0 }
-
-        let maximumOrigin = max(0, documentWidth - viewportWidth)
-        return min(max(0, currentOrigin), maximumOrigin)
-    }
-}
+// MARK: - Gutter View
 
 private final class ReviewDiffTextGutterView: NSView {
     var document = ReviewDiffRenderedDocument.empty {
@@ -1991,6 +1603,8 @@ private final class ReviewDiffTextGutterView: NSView {
     }
 }
 
+// MARK: - Diff Text View
+
 private final class ReviewDiffTextView: NSTextView {
     private var document = ReviewDiffRenderedDocument.empty
     private var codeNavigationHandler: ((ReviewDiffCodeNavigationRequest) -> Void)?
@@ -2069,6 +1683,20 @@ private final class ReviewDiffTextView: NSTextView {
         updateCodeNavigationHover(windowPoint: event.locationInWindow, modifierFlags: event.modifierFlags)
     }
 
+    override func selectionRange(
+        forProposedRange proposedCharRange: NSRange,
+        granularity: NSSelectionGranularity
+    ) -> NSRange {
+        let fallback = super.selectionRange(forProposedRange: proposedCharRange, granularity: granularity)
+        guard granularity == .selectByWord else { return fallback }
+
+        return EditorWordSelection.wordSelectionRange(
+            in: string as NSString,
+            proposedRange: proposedCharRange,
+            fallback: fallback
+        )
+    }
+
     override func mouseExited(with event: NSEvent) {
         clearCodeNavigationHover()
         super.mouseExited(with: event)
@@ -2112,6 +1740,8 @@ private final class ReviewDiffTextView: NSTextView {
         codeNavigationHoverMissCache.removeAll()
         clearCodeNavigationHover()
     }
+
+    // MARK: - Text View Setup & Drawing
 
     private func configure() {
         drawsBackground = false
@@ -2157,6 +1787,8 @@ private final class ReviewDiffTextView: NSTextView {
             }
         }
     }
+
+    // MARK: - Code Navigation Hover
 
     private func navigationRequest(at event: NSEvent) -> ReviewDiffCodeNavigationRequest? {
         guard let location = utf16Location(atWindowPoint: event.locationInWindow),
@@ -2291,6 +1923,8 @@ private final class ReviewDiffTextView: NSTextView {
         needsDisplay = true
     }
 
+    // MARK: - Hit Testing Helpers
+
     private func utf16Location(atWindowPoint windowPoint: NSPoint) -> Int? {
         guard let layoutManager,
               let textContainer,
@@ -2369,41 +2003,13 @@ private final class ReviewDiffTextView: NSTextView {
     }
 
     private func isIdentifierCharacter(_ character: unichar) -> Bool {
-        let scalar = UnicodeScalar(Int(character))
-        guard let scalar else { return false }
-        return CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "$"
+        EditorOccurrenceHighlighter.isIdentifierCharacter(character)
     }
 }
 
-private extension ReviewDiffRenderedLine {
-    init(
-        kind: SourceDiffLine.Kind,
-        oldLineNumber: Int?,
-        newLineNumber: Int?,
-        marker: String,
-        contentRange: NSRange,
-        sourceContentUTF16Length: Int,
-        sourceFileURL: URL?,
-        navigationSide: ReviewDiffCodeNavigationSide?,
-        sourceLineNumber: Int?,
-        syntaxKey: ReviewDiffLineKey?,
-        fallbackSyntaxKey: ReviewDiffLineKey?
-    ) {
-        self.init(
-            kind: Kind(kind),
-            oldLineNumber: oldLineNumber,
-            newLineNumber: newLineNumber,
-            marker: marker,
-            contentRange: contentRange,
-            sourceContentUTF16Length: sourceContentUTF16Length,
-            sourceFileURL: sourceFileURL,
-            navigationSide: navigationSide,
-            sourceLineNumber: sourceLineNumber,
-            syntaxKey: syntaxKey,
-            fallbackSyntaxKey: fallbackSyntaxKey
-        )
-    }
+// MARK: - Private Extensions
 
+private extension ReviewDiffRenderedLine {
     func syntaxLine(in highlights: ReviewDiffSyntaxHighlights) -> ReviewDiffSyntaxLine? {
         syntaxKey.flatMap { highlights.line(for: $0) }
             ?? fallbackSyntaxKey.flatMap { highlights.line(for: $0) }
@@ -2419,43 +2025,6 @@ private extension ReviewDiffRenderedLine {
             NSColor.systemRed.withAlphaComponent(0.12)
         case .context, .placeholder:
             NSColor.clear
-        }
-    }
-}
-
-private extension ReviewDiffRenderedLine.Kind {
-    init(_ kind: SourceDiffLine.Kind) {
-        switch kind {
-        case .context:
-            self = .context
-        case .addition:
-            self = .addition
-        case .deletion:
-            self = .deletion
-        }
-    }
-}
-
-private extension SourceDiffLine {
-    var unifiedMarker: String {
-        switch kind {
-        case .context:
-            " "
-        case .addition:
-            "+"
-        case .deletion:
-            "-"
-        }
-    }
-
-    func marker(for side: ReviewDiffSyntaxSide) -> String {
-        switch (kind, side) {
-        case (.addition, .new):
-            "+"
-        case (.deletion, .old):
-            "-"
-        case (.context, _), (.addition, .old), (.deletion, .new):
-            " "
         }
     }
 }
@@ -2514,16 +2083,6 @@ private extension ReviewDiffLayout {
 }
 
 private extension NSRange {
-    func clamped(toUTF16Length length: Int) -> NSRange {
-        guard location != NSNotFound else {
-            return NSRange(location: length, length: 0)
-        }
-
-        let clampedLocation = min(max(0, location), length)
-        let maximumLength = max(0, length - clampedLocation)
-        return NSRange(location: clampedLocation, length: min(max(0, self.length), maximumLength))
-    }
-
     var nonEmpty: NSRange? {
         length > 0 ? self : nil
     }

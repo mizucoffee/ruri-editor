@@ -31,22 +31,20 @@ final class ProjectFileSearchViewModelTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws -> Int {
-        for _ in 0..<100 {
+        var readyFileCount: Int?
+        try await TestSupport.waitUntil("file search index readiness", file: file, line: line) {
             if case .ready(let fileCount) = viewModel.indexStatus {
-                return fileCount
+                readyFileCount = fileCount
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for file search index readiness.", file: file, line: line)
-        return -1
+        return try XCTUnwrap(readyFileCount, file: file, line: line)
     }
 
     private func makeTemporaryDirectory() throws -> URL {
-        let url = fileManager.temporaryDirectory.appending(path: UUID().uuidString)
-        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+        try TestSupport.makeTemporaryDirectory(fileManager: fileManager)
     }
 
     private func makeFileService() throws -> ProjectFileService {

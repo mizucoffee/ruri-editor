@@ -50,7 +50,7 @@ nonisolated struct WorktreeInitializationStore: WorktreeInitializationStoring, S
             )
 
             if let repositoryRootURL,
-               Self.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
+               FileURLRewriter.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
                 try Self.ensureRuriDirectoryIsLocallyExcluded(in: repositoryRootURL)
             }
         }.value
@@ -101,26 +101,6 @@ nonisolated struct WorktreeInitializationStore: WorktreeInitializationStoring, S
         try updatedText.write(to: excludeURL, atomically: true, encoding: .utf8)
     }
 
-    private nonisolated static func isDescendantOrSame(_ url: URL, of rootURL: URL) -> Bool {
-        let path = normalizedPath(url)
-        let rootPath = normalizedPath(rootURL)
-
-        if path == rootPath {
-            return true
-        }
-
-        let rootPathPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-        return path.hasPrefix(rootPathPrefix)
-    }
-
-    private nonisolated static func normalizedPath(_ url: URL) -> String {
-        var path = NSString(string: url.standardizedFileURL.path(percentEncoded: false)).standardizingPath
-
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
-        }
-        return path
-    }
 }
 
 nonisolated private struct WorktreeInitializationCodableDocument: Codable {

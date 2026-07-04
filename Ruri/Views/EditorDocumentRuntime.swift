@@ -8,6 +8,8 @@ import Foundation
 
 @MainActor
 final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
+    // MARK: - Stored Properties
+
     let workspaceID: ProjectWorkspaceSnapshot.ID
     let documentID: OpenDocument.ID
     let scrollView: NSScrollView
@@ -45,6 +47,9 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     private var isSyntaxHighlightingDisabledForLargeDocument = false
     private var appliedSelectionRevealID: UUID?
     private var mutableFindState = EditorFindState()
+    private(set) var occurrenceHighlightRanges: [NSRange] = []
+    private var lastOccurrenceTarget: (identifier: String, range: NSRange)?
+    private(set) var bracketHighlightRanges: [NSRange] = []
     private(set) var diffDecorations: [EditorDiffDecoration] = []
     private var implementationHoverTask: Task<Void, Never>?
     private var implementationHoverRequestID = UUID()
@@ -52,6 +57,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     private var implementationHoverHitCache: [TextRange: TextRange] = [:]
     private var implementationHoverMissCache = Set<TextRange>()
     private var activeImplementationHoverRange: NSRange?
+
+    // MARK: - Lifecycle & Activation
 
     init(
         workspaceID: ProjectWorkspaceSnapshot.ID,
@@ -104,6 +111,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         refreshSyntaxHighlightingIfNeeded()
         restoreSelection()
         restoreScroll()
+        updateOccurrenceHighlights()
 
         guard focusesTextView else { return }
 
@@ -136,6 +144,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textView.delegate = nil
         textView.runtime = nil
     }
+
+    // MARK: - Text Sync & Layout
 
     func syncExternalTextIfNeeded(_ text: String, allowsFirstResponderUpdate: Bool = false) {
         guard textView.string != text,
@@ -206,6 +216,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         diffScroller.needsDisplay = true
     }
 
+    // MARK: - Undo State
+
     func breakUndoCoalescing() {
         undoCoalescingBreakTask?.cancel()
         undoCoalescingBreakTask = nil
@@ -230,6 +242,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     var redoCommandTitle: String {
         Self.commandTitle(base: "Redo", actionName: textUndoManager.redoActionName)
     }
+
+    // MARK: - Editor State & Settings
 
     var cursorPosition: EditorCursorPosition {
         Self.cursorPosition(in: textView.string, selectedRange: textView.selectedRange())
@@ -261,6 +275,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         restoreScroll()
         textView.needsDisplay = true
     }
+
+    // MARK: - Line Editing Commands
 
     @discardableResult
     func insertTab() -> Bool {
@@ -348,6 +364,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     var canCutCurrentLinesWhenSelectionIsEmpty: Bool {
         canCopyCurrentLinesWhenSelectionIsEmpty && selectedLineDeletionRange() != nil
     }
+
+    // MARK: - Find & Replace
 
     var findState: EditorFindState {
         mutableFindState
@@ -461,6 +479,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         selectFindMatch(at: mutableFindState.selectedMatchIndex)
     }
 
+    // MARK: - Syntax Language Override
+
     func setSyntaxLanguageOverride(_ languageName: String?) {
         let normalizedLanguageName = languageName?.isEmpty == true ? nil : languageName
         guard session.syntaxLanguageOverride != normalizedLanguageName else { return }
@@ -471,6 +491,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         lastSyntaxHighlightedLanguageName = nil
         requestSyntaxHighlighting()
     }
+
+    // MARK: - Implementation Jump & Hover
 
     @discardableResult
     func requestImplementationJump(at event: NSEvent) -> Bool {
@@ -529,6 +551,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         setImplementationHoverRange(nil)
     }
 
+    // MARK: - Undo Commands
+
     func performUndo() {
         breakUndoCoalescing()
 
@@ -545,6 +569,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textUndoManager.redo()
     }
 
+    // MARK: - NSTextViewDelegate
+
     func textDidChange(_ notification: Notification) {
         guard !isApplyingProgrammaticChange,
               !isApplyingSyntaxAttributes,
@@ -554,6 +580,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         }
 
         delegate?.editorDocumentRuntime(self, didChangeText: textView.string)
+        clearOccurrenceHighlights()
+        clearBracketHighlights()
         resetImplementationHoverState()
         updateSelection()
         refreshFindMatches(preservingSelectedRange: true)
@@ -576,6 +604,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         updateSelection()
         refreshSelectedFindMatchIndex()
     }
+
+    // MARK: - Configuration
 
     private func configure(scrollView: NSScrollView, textView: RuntimeTextView) {
         scrollView.borderType = .noBorder
@@ -615,6 +645,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         }
     }
 
+    // MARK: - Text Content & Scroll Restoration
+
     private func setText(_ text: String, registeringUndo: Bool) {
         guard textView.string != text else { return }
 
@@ -634,6 +666,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         lastSyntaxHighlightedText = nil
         lastSyntaxHighlightedThemeName = nil
         lastSyntaxHighlightedLanguageName = nil
+        clearOccurrenceHighlights()
+        clearBracketHighlights()
         resetImplementationHoverState()
         lineNumberRulerView?.invalidateLineNumbers()
         textView.needsDisplay = true
@@ -714,7 +748,11 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         session.selectedRange = selectedRange
         delegate?.editorDocumentRuntime(self, didChangeSelection: selectedRange)
         invalidateSelectedLineHighlight()
+        updateOccurrenceHighlights()
+        updateBracketHighlights()
     }
+
+    // MARK: - Line Editing Internals
 
     private func selectedLineRangesForIndenting(_ selectedRange: NSRange) -> [NSRange] {
         Self.selectedLineRanges(in: textView.string as NSString, selectedRanges: [selectedRange])
@@ -900,6 +938,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         isApplyingSyntaxAttributes = false
     }
 
+    // MARK: - Find & Replace Internals
+
     private func selectedTextForFindPrefill() -> String? {
         let selectedRange = textView.selectedRange()
         let text = textView.string as NSString
@@ -1072,6 +1112,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         textView.needsDisplay = true
         delegate?.editorDocumentRuntime(self, didChangeFindState: state)
     }
+
+    // MARK: - Implementation Hover Internals
 
     private func resetImplementationHoverState() {
         implementationHoverHitCache.removeAll()
@@ -1261,30 +1303,10 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     }
 
     private func identifierRange(containingUTF16Offset utf16Offset: Int) -> NSRange? {
-        let string = textView.string as NSString
-        guard utf16Offset >= 0,
-              utf16Offset < string.length,
-              Self.isIdentifierCharacter(string.character(at: utf16Offset)) else {
-            return nil
-        }
-
-        var start = utf16Offset
-        while start > 0 && Self.isIdentifierCharacter(string.character(at: start - 1)) {
-            start -= 1
-        }
-
-        var end = utf16Offset + 1
-        while end < string.length && Self.isIdentifierCharacter(string.character(at: end)) {
-            end += 1
-        }
-
-        return NSRange(location: start, length: end - start)
-    }
-
-    private static func isIdentifierCharacter(_ character: unichar) -> Bool {
-        let scalar = UnicodeScalar(Int(character))
-        guard let scalar else { return false }
-        return CharacterSet.alphanumerics.contains(scalar) || scalar == "_" || scalar == "$"
+        EditorOccurrenceHighlighter.identifierRange(
+            in: textView.string as NSString,
+            containingUTF16Offset: utf16Offset
+        )
     }
 
     private func utf16Offset(for event: NSEvent) -> Int? {
@@ -1310,6 +1332,72 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         return min(max(0, characterIndex), textView.string.utf16.count)
     }
+
+    // MARK: - Occurrence Highlight Internals
+
+    private func updateOccurrenceHighlights() {
+        guard !textView.hasMarkedText() else { return }
+
+        let string = textView.string as NSString
+        let selectedRange = textView.selectedRange()
+
+        guard let targetRange = EditorOccurrenceHighlighter.targetIdentifierRange(
+            in: string,
+            selectedRange: selectedRange
+        ) else {
+            clearOccurrenceHighlights()
+            return
+        }
+
+        let identifier = string.substring(with: targetRange)
+        if let lastOccurrenceTarget,
+           lastOccurrenceTarget.identifier == identifier,
+           NSEqualRanges(lastOccurrenceTarget.range, targetRange) {
+            return
+        }
+
+        lastOccurrenceTarget = (identifier: identifier, range: targetRange)
+        let ranges = EditorOccurrenceHighlighter.occurrenceRanges(in: string, selectedRange: selectedRange)
+
+        guard occurrenceHighlightRanges != ranges else { return }
+
+        occurrenceHighlightRanges = ranges
+        textView.needsDisplay = true
+    }
+
+    private func clearOccurrenceHighlights() {
+        lastOccurrenceTarget = nil
+
+        guard !occurrenceHighlightRanges.isEmpty else { return }
+
+        occurrenceHighlightRanges = []
+        textView.needsDisplay = true
+    }
+
+    // MARK: - Bracket Highlight Internals
+
+    private func updateBracketHighlights() {
+        guard !textView.hasMarkedText() else { return }
+
+        let ranges = EditorBracketMatcher.matchedBracketRanges(
+            in: textView.string as NSString,
+            selectedRange: textView.selectedRange()
+        )
+
+        guard bracketHighlightRanges != ranges else { return }
+
+        bracketHighlightRanges = ranges
+        textView.needsDisplay = true
+    }
+
+    private func clearBracketHighlights() {
+        guard !bracketHighlightRanges.isEmpty else { return }
+
+        bracketHighlightRanges = []
+        textView.needsDisplay = true
+    }
+
+    // MARK: - Text Attributes & Indent Guides
 
     private func invalidateSelectedLineHighlight() {
         textView.needsDisplay = true
@@ -1376,6 +1464,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
 
         return attributes
     }
+
+    // MARK: - Syntax Highlighting Internals
 
     private func scheduleSyntaxHighlighting() {
         guard !textView.hasMarkedText() else { return }
@@ -1532,6 +1622,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         session.syntaxLanguageOverride ?? inferredSyntaxLanguageName
     }
 
+    // MARK: - Bounds Observation & Undo Coalescing
+
     private func observeBoundsChanges(in clipView: NSClipView) {
         guard observedClipView !== clipView else { return }
 
@@ -1624,6 +1716,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
         return "\(base) \(actionName)"
     }
 
+    // MARK: - Static Text Helpers
+
     private static func clipboardText(forLineRange lineRange: NSRange, in string: NSString) -> String {
         guard lineRange.length > 0 else {
             return "\n"
@@ -1714,17 +1808,7 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
     }
 }
 
-private extension NSRange {
-    func clamped(toUTF16Length length: Int) -> NSRange {
-        guard location != NSNotFound else {
-            return NSRange(location: length, length: 0)
-        }
-
-        let clampedLocation = min(max(0, location), length)
-        let maximumLength = max(0, length - clampedLocation)
-        return NSRange(location: clampedLocation, length: min(max(0, self.length), maximumLength))
-    }
-}
+// MARK: - Private Extensions
 
 private extension NSString {
     var trailingLineSeparatorRange: NSRange? {

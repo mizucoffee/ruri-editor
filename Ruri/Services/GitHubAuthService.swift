@@ -242,16 +242,24 @@ nonisolated private enum GitHubProcessCommandRunner {
             terminationSemaphore.signal()
         }
 
+        let stdoutEOFSemaphore = DispatchSemaphore(value: 0)
+        let stderrEOFSemaphore = DispatchSemaphore(value: 0)
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutEOFSemaphore.signal()
+            } else {
                 stdout.append(data)
                 outputHandler?(data)
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrEOFSemaphore.signal()
+            } else {
                 stderr.append(data)
                 outputHandler?(data)
             }
@@ -272,26 +280,18 @@ nonisolated private enum GitHubProcessCommandRunner {
 
         let timeoutResult = terminationSemaphore.wait(timeout: .now() + timeout)
         if timeoutResult == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
+            SafeProcessLauncher.terminateWithEscalation(process)
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             throw GitHubCommandRunnerProcessError.timedOut
         }
 
+        // 終了直前のバースト出力をハンドラがEOFまで読み切るのを待ってから結果を確定する。
+        // 孫プロセスがpipeを保持し続ける場合に備えて待ちは有限にする。
+        _ = stdoutEOFSemaphore.wait(timeout: .now() + 2)
+        _ = stderrEOFSemaphore.wait(timeout: .now() + 2)
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
-        if !remainingStdout.isEmpty {
-            stdout.append(remainingStdout)
-            outputHandler?(remainingStdout)
-        }
-        let remainingStderr = stderrPipe.fileHandleForReading.availableData
-        if !remainingStderr.isEmpty {
-            stderr.append(remainingStderr)
-            outputHandler?(remainingStderr)
-        }
 
         return GitHubCommandResult(
             stdout: stdout.data(),

@@ -35,6 +35,45 @@ final class TerminalWorkspaceStateTests: XCTestCase {
         XCTAssertEqual(snapshot.selectedTabID, first.id)
     }
 
+    func testSelectTabAtShortcutNumberUsesOneBasedTabOrder() {
+        let rootURL = URL(filePath: "/tmp/Project")
+        var workspace = TerminalWorkspaceState(id: rootURL, rootURL: rootURL)
+        let first = workspace.createTab(shellPath: "/bin/zsh")
+        let second = workspace.createTab(shellPath: "/bin/zsh")
+        let third = workspace.createTab(shellPath: "/bin/zsh")
+
+        workspace.selectTab(atShortcutNumber: 1)
+        XCTAssertEqual(workspace.selectedTabID, first.id)
+
+        workspace.selectTab(atShortcutNumber: 2)
+        XCTAssertEqual(workspace.selectedTabID, second.id)
+
+        workspace.selectTab(atShortcutNumber: 3)
+        XCTAssertEqual(workspace.selectedTabID, third.id)
+    }
+
+    func testSelectTabAtShortcutNumberZeroSelectsLastTab() {
+        let rootURL = URL(filePath: "/tmp/Project")
+        var workspace = TerminalWorkspaceState(id: rootURL, rootURL: rootURL)
+        _ = workspace.createTab(shellPath: "/bin/zsh")
+        let second = workspace.createTab(shellPath: "/bin/zsh")
+        workspace.selectTab(atShortcutNumber: 1)
+
+        workspace.selectTab(atShortcutNumber: 0)
+
+        XCTAssertEqual(workspace.selectedTabID, second.id)
+    }
+
+    func testSelectTabAtShortcutNumberOutOfRangeDoesNothing() {
+        let rootURL = URL(filePath: "/tmp/Project")
+        var workspace = TerminalWorkspaceState(id: rootURL, rootURL: rootURL)
+        let tab = workspace.createTab(shellPath: "/bin/zsh")
+
+        workspace.selectTab(atShortcutNumber: 2)
+
+        XCTAssertEqual(workspace.selectedTabID, tab.id)
+    }
+
     func testSnapshotAttachesCodingAgentStatusAndUnreadFlag() {
         let rootURL = URL(filePath: "/tmp/Project")
         var workspace = TerminalWorkspaceState(id: rootURL, rootURL: rootURL)

@@ -36,9 +36,9 @@ enum CodingAgentState: String, Codable, Equatable, Sendable {
 
     nonisolated var isNotificationEligible: Bool {
         switch self {
-        case .running:
+        case .running, .error:
             false
-        case .waiting, .completed, .error:
+        case .waiting, .completed:
             true
         }
     }

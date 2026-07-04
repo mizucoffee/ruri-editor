@@ -121,17 +121,16 @@ final class ProjectFileWatcher {
 
     typealias ChangeHandler = @MainActor (Change) -> Void
 
-    private let debounceNanoseconds: UInt64
     private let changeHandler: ChangeHandler
+    private let debouncer: PerKeyDebouncer<URL>
     private var streamsByRootURL: [URL: FSEventStreamRef] = [:]
-    private var debounceTasksByRootURL: [URL: Task<Void, Never>] = [:]
     private var pendingChangesByRootURL: [URL: PendingChange] = [:]
 
     init(
         debounceNanoseconds: UInt64 = 500_000_000,
         changeHandler: @escaping ChangeHandler
     ) {
-        self.debounceNanoseconds = debounceNanoseconds
+        self.debouncer = PerKeyDebouncer(delayNanoseconds: debounceNanoseconds)
         self.changeHandler = changeHandler
     }
 
@@ -184,7 +183,7 @@ final class ProjectFileWatcher {
 
     func stopWatching(_ rootURL: URL) {
         let standardizedURL = rootURL.standardizedFileURL
-        debounceTasksByRootURL.removeValue(forKey: standardizedURL)?.cancel()
+        debouncer.cancel(for: standardizedURL)
         pendingChangesByRootURL[standardizedURL] = nil
 
         guard let stream = streamsByRootURL.removeValue(forKey: standardizedURL) else {
@@ -235,14 +234,14 @@ final class ProjectFileWatcher {
 
         let rootPairs = rootURLs.map { rootURL in
             let standardizedURL = rootURL.standardizedFileURL
-            return (standardizedURL, normalizedDirectoryPath(standardizedURL))
+            return (standardizedURL, FileURLRewriter.normalizedPath(standardizedURL))
         }.sorted {
             $0.1.count > $1.1.count
         }
         var changesByRootURL: [URL: PendingChange] = [:]
 
         for event in events {
-            let normalizedEventPath = normalizedPath(event.path)
+            let normalizedEventPath = FileURLRewriter.normalizedPath(event.path)
 
             guard let (rootURL, rootPath) = rootPairs.first(where: { _, rootPath in
                 normalizedEventPath == rootPath
@@ -325,7 +324,7 @@ final class ProjectFileWatcher {
 
     private func parentPath(for path: String) -> String? {
         let parent = NSString(string: path).deletingLastPathComponent
-        return parent.isEmpty || parent == path ? nil : normalizedPath(parent)
+        return parent.isEmpty || parent == path ? nil : FileURLRewriter.normalizedPath(parent)
     }
 
     private func scheduleChangeNotification(_ change: Change) {
@@ -344,23 +343,13 @@ final class ProjectFileWatcher {
 
         let rootURL = change.rootURL
         pendingChangesByRootURL[rootURL, default: PendingChange()].formUnion(change)
-        debounceTasksByRootURL[rootURL]?.cancel()
-        debounceTasksByRootURL[rootURL] = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: self?.debounceNanoseconds ?? 500_000_000)
-            } catch {
-                return
-            }
-
-            await MainActor.run {
-                guard let self else { return }
-                let change = self.pendingChangesByRootURL[rootURL]?.change(rootURL: rootURL)
-                    ?? Change(rootURL: rootURL, dirtyFilePaths: [])
-                self.pendingChangesByRootURL[rootURL] = nil
-                self.debounceTasksByRootURL[rootURL] = nil
-                guard !change.isEmpty else { return }
-                self.changeHandler(change)
-            }
+        debouncer.schedule(for: rootURL) { [weak self] in
+            guard let self else { return }
+            let change = self.pendingChangesByRootURL[rootURL]?.change(rootURL: rootURL)
+                ?? Change(rootURL: rootURL, dirtyFilePaths: [])
+            self.pendingChangesByRootURL[rootURL] = nil
+            guard !change.isEmpty else { return }
+            self.changeHandler(change)
         }
     }
 
@@ -380,19 +369,6 @@ final class ProjectFileWatcher {
         return relativePath == ".ruri" || relativePath.hasPrefix(".ruri/")
     }
 
-    private func normalizedDirectoryPath(_ url: URL) -> String {
-        normalizedPath(url.standardizedFileURL.path(percentEncoded: false))
-    }
-
-    private func normalizedPath(_ path: String) -> String {
-        var normalizedPath = NSString(string: path).standardizingPath
-
-        while normalizedPath.count > 1 && normalizedPath.hasSuffix("/") {
-            normalizedPath.removeLast()
-        }
-
-        return normalizedPath
-    }
 }
 
 private let projectFileWatcherCallback: FSEventStreamCallback = { _, info, numEvents, eventPaths, eventFlags, _ in

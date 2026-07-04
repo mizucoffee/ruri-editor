@@ -8,6 +8,7 @@ import UserNotifications
 
 nonisolated protocol CodingAgentStatusNotifying: Sendable {
     func notify(status: CodingAgentStatus, context: CodingAgentNotificationContext) async
+    func removeDeliveredNotifications(forTerminalIDs terminalIDs: Set<TerminalTab.ID>) async
 }
 
 nonisolated struct CodingAgentNotificationContext: Equatable, Sendable {
@@ -25,6 +26,8 @@ nonisolated struct CodingAgentStatusNotifier: CodingAgentStatusNotifying, Sendab
         guard await requestAuthorizationIfNeeded(center: center) else {
             return
         }
+
+        await removeDeliveredNotifications(forTerminalIDs: [status.terminalID])
 
         let content = UNMutableNotificationContent()
         content.title = "\(status.provider.displayName) \(status.state.notificationTitle(for: status.event))"
@@ -44,6 +47,27 @@ nonisolated struct CodingAgentStatusNotifier: CodingAgentStatusNotifying, Sendab
             trigger: nil
         )
         try? await center.add(request)
+    }
+
+    nonisolated func removeDeliveredNotifications(forTerminalIDs terminalIDs: Set<TerminalTab.ID>) async {
+        guard !terminalIDs.isEmpty else { return }
+
+        let center = UNUserNotificationCenter.current()
+        let terminalIDStrings = Set(terminalIDs.map(\.uuidString))
+        let identifiers = await center.deliveredNotifications()
+            .filter { notification in
+                let userInfo = notification.request.content.userInfo
+                guard userInfo[CodingAgentNotificationUserInfoKey.kind] as? String
+                        == CodingAgentNotificationUserInfoValue.kind,
+                      let terminalID = userInfo[CodingAgentNotificationUserInfoKey.terminalID] as? String else {
+                    return false
+                }
+                return terminalIDStrings.contains(terminalID)
+            }
+            .map(\.request.identifier)
+
+        guard !identifiers.isEmpty else { return }
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
     private nonisolated func requestAuthorizationIfNeeded(center: UNUserNotificationCenter) async -> Bool {

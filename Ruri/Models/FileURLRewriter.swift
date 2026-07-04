@@ -15,17 +15,12 @@ nonisolated enum FileURLRewriter {
         replacing oldRootURL: URL,
         with newRootURL: URL
     ) -> URL? {
-        let path = normalizedPath(url)
-        let oldRootPath = normalizedPath(oldRootURL)
+        guard let relativePath = relativePath(from: oldRootURL, to: url) else { return nil }
 
-        if path == oldRootPath {
+        if relativePath.isEmpty {
             return newRootURL.standardizedFileURL
         }
 
-        let oldRootPrefix = oldRootPath.hasSuffix("/") ? oldRootPath : "\(oldRootPath)/"
-        guard path.hasPrefix(oldRootPrefix) else { return nil }
-
-        let relativePath = String(path.dropFirst(oldRootPrefix.count))
         return newRootURL.appending(path: relativePath).standardizedFileURL
     }
 
@@ -37,5 +32,39 @@ nonisolated enum FileURLRewriter {
         }
 
         return path
+    }
+
+    // String variant for raw file-system event paths. Unlike the URL variant it
+    // must not round-trip through URL(filePath:), which would resolve relative
+    // paths against the current directory instead of dropping them.
+    static func normalizedPath(_ path: String) -> String {
+        var normalizedPath = NSString(string: path).standardizingPath
+
+        while normalizedPath.count > 1 && normalizedPath.hasSuffix("/") {
+            normalizedPath.removeLast()
+        }
+
+        return normalizedPath
+    }
+
+    // Returns "" when the paths are equal and nil when targetURL is not a
+    // descendant of rootURL. Callers that need a display fallback or a "."
+    // form apply it explicitly at the call site.
+    static func relativePath(from rootURL: URL, to targetURL: URL) -> String? {
+        let rootPath = normalizedPath(rootURL)
+        let targetPath = normalizedPath(targetURL)
+
+        if targetPath == rootPath {
+            return ""
+        }
+
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
+        guard targetPath.hasPrefix(rootPrefix) else { return nil }
+
+        return String(targetPath.dropFirst(rootPrefix.count))
+    }
+
+    static func isDescendantOrSame(_ url: URL, of rootURL: URL) -> Bool {
+        relativePath(from: rootURL, to: url) != nil
     }
 }

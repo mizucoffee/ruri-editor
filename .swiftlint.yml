@@ -1,0 +1,28 @@
+# AGENTS.md の禁止事項を機械検出するためのカスタムルールのみを有効化する。
+# 一般的なスタイルルールは意図的に有効化しない(規約検出が目的で、警告の洪水で signal を殺さないため)。
+only_rules:
+  - custom_rules
+
+included:
+  - Ruri
+  - RuriTests
+
+custom_rules:
+  direct_process_run:
+    name: "Direct Process launch"
+    regex: '\bprocess\.run\(\)|\.launch\(\)'
+    excluded:
+      - ".*/SafeProcessLauncher\\.swift"
+      - ".*/RuriTests/TestSupport\\.swift"
+    message: "Process を直接起動しない。SafeProcessLauncher.run(_:) を使う(AGENTS.md「実装方針」参照)。"
+    severity: warning
+  windowgroup_url_self:
+    name: "WindowGroup(for: URL.self)"
+    regex: 'WindowGroup\s*\([^)]*for:\s*URL\.self'
+    message: "WindowGroup(for: URL.self) は外部URLも新規ウィンドウ入力になるため使わない。ProjectWindowRequest のような専用 Codable 値を使う(AGENTS.md 参照)。"
+    severity: warning
+  external_lsp_launch:
+    name: "External LSP launch"
+    regex: 'jdtls|kotlin-language-server|sourcekit-lsp'
+    message: "外部LSPを起動しない。Javaナビゲーションは同梱 java-symbol-resolver.jar を使う(AGENTS.md 参照)。"
+    severity: warning

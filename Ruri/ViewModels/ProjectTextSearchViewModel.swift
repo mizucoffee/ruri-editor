@@ -8,6 +8,11 @@ import Foundation
 
 @MainActor
 final class ProjectTextSearchViewModel: ObservableObject {
+    struct SelectionScrollRequest: Equatable {
+        let resultID: ProjectTextSearchResult.ID
+        let token: UUID
+    }
+
     @Published private(set) var isPresented = false
     @Published var query = "" {
         didSet { scheduleSearch() }
@@ -24,12 +29,24 @@ final class ProjectTextSearchViewModel: ObservableObject {
     @Published var isCaseSensitive = false {
         didSet { scheduleSearch() }
     }
-    @Published private(set) var results: [ProjectTextSearchResult] = []
-    @Published private(set) var selectedResultID: ProjectTextSearchResult.ID?
+    @Published private(set) var results: [ProjectTextSearchResult] = [] {
+        didSet {
+            syncPreview()
+            snippetHighlighter.update(results: results)
+        }
+    }
+    @Published private(set) var selectedResultID: ProjectTextSearchResult.ID? {
+        didSet { syncPreview() }
+    }
     @Published private(set) var isSearching = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var summary: ProjectTextSearchSummary?
+    @Published private(set) var selectionScrollRequest: SelectionScrollRequest?
+    @Published private(set) var snippetSyntaxRuns: [ProjectTextSearchResult.ID: [SyntaxHighlightRun]] = [:]
 
+    let preview: CodePreviewController
+
+    private let snippetHighlighter: ProjectTextSearchSnippetHighlighter
     private let searchService: ProjectTextSearchService
     private var activeProjectURL: URL?
     private var searchTask: Task<Void, Never>?
@@ -66,8 +83,18 @@ final class ProjectTextSearchViewModel: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
-    init(searchService: ProjectTextSearchService = ProjectTextSearchService()) {
+    init(
+        searchService: ProjectTextSearchService = ProjectTextSearchService(),
+        preview: CodePreviewController? = nil,
+        snippetHighlighter: ProjectTextSearchSnippetHighlighter? = nil
+    ) {
         self.searchService = searchService
+        self.preview = preview ?? CodePreviewController()
+        self.snippetHighlighter = snippetHighlighter ?? ProjectTextSearchSnippetHighlighter()
+
+        self.snippetHighlighter.onRunsUpdate = { [weak self] runsByResultID in
+            self?.snippetSyntaxRuns = runsByResultID
+        }
     }
 
     deinit {
@@ -82,6 +109,7 @@ final class ProjectTextSearchViewModel: ObservableObject {
         errorMessage = nil
         results = []
         selectedResultID = nil
+        selectionScrollRequest = nil
         summary = nil
         isSearching = false
 
@@ -97,6 +125,8 @@ final class ProjectTextSearchViewModel: ObservableObject {
         summary = nil
         isSearching = false
         searchTask?.cancel()
+        preview.reset()
+        snippetHighlighter.reset()
     }
 
     func updateActiveProject(_ projectURL: URL?) {
@@ -115,6 +145,8 @@ final class ProjectTextSearchViewModel: ObservableObject {
         selectedResultID = nil
         errorMessage = nil
         summary = nil
+        preview.reset()
+        snippetHighlighter.reset()
         scheduleSearch(debounce: false)
     }
 
@@ -128,6 +160,8 @@ final class ProjectTextSearchViewModel: ObservableObject {
         results = []
         selectedResultID = nil
         summary = nil
+        preview.reset()
+        snippetHighlighter.reset()
         scheduleSearch(debounce: false)
     }
 
@@ -242,8 +276,13 @@ final class ProjectTextSearchViewModel: ObservableObject {
         isSearching = false
         results = []
         selectedResultID = nil
+        selectionScrollRequest = nil
         errorMessage = nil
         summary = nil
+    }
+
+    private func syncPreview() {
+        preview.setRequest(selectedResult?.codePreviewRequest)
     }
 
     private func repairSelection() {
@@ -258,6 +297,7 @@ final class ProjectTextSearchViewModel: ObservableObject {
         }
 
         selectedResultID = results[0].id
+        requestSelectionScroll()
     }
 
     private func moveSelection(offset: Int) {
@@ -269,5 +309,11 @@ final class ProjectTextSearchViewModel: ObservableObject {
         let nextIndex = min(max(currentIndex + offset, 0), results.count - 1)
 
         selectedResultID = results[nextIndex].id
+        requestSelectionScroll()
+    }
+
+    private func requestSelectionScroll() {
+        guard let selectedResultID else { return }
+        selectionScrollRequest = SelectionScrollRequest(resultID: selectedResultID, token: UUID())
     }
 }

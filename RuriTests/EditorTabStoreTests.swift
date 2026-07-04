@@ -57,4 +57,49 @@ final class EditorTabStoreTests: XCTestCase {
         )
         XCTAssertEqual(store.selectedTabID, third.selectedTabID)
     }
+
+    func testSelectTabAtShortcutNumberUsesOneBasedTabOrder() {
+        let firstDocumentID = URL(filePath: "/tmp/First.swift")
+        let secondDocumentID = URL(filePath: "/tmp/Second.swift")
+        let thirdDocumentID = URL(filePath: "/tmp/Third.swift")
+        var store = EditorTabStore()
+
+        let first = store.openTab(for: firstDocumentID, replaceSelectedMainTab: false)
+        let second = store.openTab(for: secondDocumentID, replaceSelectedMainTab: false)
+        let third = store.openTab(for: thirdDocumentID, replaceSelectedMainTab: false)
+
+        store.selectTab(atShortcutNumber: 1)
+        XCTAssertEqual(store.selectedTabID, first.selectedTabID)
+
+        store.selectTab(atShortcutNumber: 2)
+        XCTAssertEqual(store.selectedTabID, second.selectedTabID)
+
+        store.selectTab(atShortcutNumber: 3)
+        XCTAssertEqual(store.selectedTabID, third.selectedTabID)
+    }
+
+    func testSelectTabAtShortcutNumberZeroSelectsLastTab() {
+        let firstDocumentID = URL(filePath: "/tmp/First.swift")
+        let secondDocumentID = URL(filePath: "/tmp/Second.swift")
+        var store = EditorTabStore()
+
+        _ = store.openTab(for: firstDocumentID, replaceSelectedMainTab: false)
+        let second = store.openTab(for: secondDocumentID, replaceSelectedMainTab: false)
+        store.selectTab(atShortcutNumber: 1)
+
+        store.selectTab(atShortcutNumber: 0)
+
+        XCTAssertEqual(store.selectedTabID, second.selectedTabID)
+    }
+
+    func testSelectTabAtShortcutNumberOutOfRangeDoesNothing() {
+        let firstDocumentID = URL(filePath: "/tmp/First.swift")
+        var store = EditorTabStore()
+
+        let first = store.openTab(for: firstDocumentID, replaceSelectedMainTab: false)
+
+        store.selectTab(atShortcutNumber: 2)
+
+        XCTAssertEqual(store.selectedTabID, first.selectedTabID)
+    }
 }

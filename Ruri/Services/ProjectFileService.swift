@@ -7,6 +7,7 @@ import Foundation
 
 enum ProjectFileError: LocalizedError, Equatable, Sendable {
     case unreadableUTF8File
+    case staleFileSignature
     case invalidFileName
     case destinationAlreadyExists
     case fileSearchExecutableNotFound
@@ -16,6 +17,8 @@ enum ProjectFileError: LocalizedError, Equatable, Sendable {
         switch self {
         case .unreadableUTF8File:
             "UTF-8として読めないファイルです"
+        case .staleFileSignature:
+            "保存先のファイルが外部で変更されています"
         case .invalidFileName:
             "使用できないファイル名です"
         case .destinationAlreadyExists:
@@ -85,14 +88,53 @@ struct ProjectFileService: Sendable {
     @discardableResult
     nonisolated func writeUTF8File(_ text: String, to url: URL) async throws -> ProjectFileSignature? {
         try await Task.detached(priority: .userInitiated) {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            return try Self.fileSignatureSnapshot(at: url)
+            try Self.writeUTF8FileSnapshot(text, to: url)
+        }.value
+    }
+
+    /// ディスク上のファイルが `expectedSignature` のまま変わっていない場合だけ書き込む
+    /// compare-and-swap。watcher未反映の外部変更を黙って上書きしないための保存経路用。
+    @discardableResult
+    nonisolated func writeUTF8File(
+        _ text: String,
+        to url: URL,
+        replacingSignature expectedSignature: ProjectFileSignature?
+    ) async throws -> ProjectFileSignature? {
+        try await Task.detached(priority: .userInitiated) {
+            guard try Self.fileSignatureSnapshot(at: url) == expectedSignature else {
+                throw ProjectFileError.staleFileSignature
+            }
+            return try Self.writeUTF8FileSnapshot(text, to: url)
         }.value
     }
 
     nonisolated func renameItem(at url: URL, to proposedName: String) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
             try Self.renameItemSnapshot(at: url, to: proposedName)
+        }.value
+    }
+
+    nonisolated func createFile(named name: String, in directoryURL: URL) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.createItemSnapshot(named: name, in: directoryURL, isDirectory: false)
+        }.value
+    }
+
+    nonisolated func createDirectory(named name: String, in directoryURL: URL) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.createItemSnapshot(named: name, in: directoryURL, isDirectory: true)
+        }.value
+    }
+
+    nonisolated func trashItem(at url: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }.value
+    }
+
+    nonisolated func duplicateItem(at url: URL) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.duplicateItemSnapshot(at: url)
         }.value
     }
 
@@ -196,6 +238,59 @@ struct ProjectFileService: Sendable {
         return destinationURL.standardizedFileURL
     }
 
+    nonisolated private static func createItemSnapshot(
+        named name: String,
+        in directoryURL: URL,
+        isDirectory: Bool
+    ) throws -> URL {
+        let fileManager = FileManager.default
+        let newName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard isValidFileName(newName) else {
+            throw ProjectFileError.invalidFileName
+        }
+
+        let destinationURL = directoryURL.appendingPathComponent(newName)
+
+        if fileManager.fileExists(atPath: destinationURL.path(percentEncoded: false)) {
+            throw ProjectFileError.destinationAlreadyExists
+        }
+
+        if isDirectory {
+            try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: false)
+        } else {
+            try Data().write(to: destinationURL)
+        }
+
+        return destinationURL.standardizedFileURL
+    }
+
+    nonisolated private static func duplicateItemSnapshot(at url: URL) throws -> URL {
+        let fileManager = FileManager.default
+        let parentURL = url.deletingLastPathComponent()
+        let pathExtension = url.pathExtension
+        let baseName = pathExtension.isEmpty
+            ? url.lastPathComponent
+            : url.deletingPathExtension().lastPathComponent
+
+        for attempt in 1...10000 {
+            let candidateBase = attempt == 1 ? "\(baseName) copy" : "\(baseName) copy \(attempt)"
+            var candidateURL = parentURL.appendingPathComponent(candidateBase)
+            if !pathExtension.isEmpty {
+                candidateURL = candidateURL.appendingPathExtension(pathExtension)
+            }
+
+            if fileManager.fileExists(atPath: candidateURL.path(percentEncoded: false)) {
+                continue
+            }
+
+            try fileManager.copyItem(at: url, to: candidateURL)
+            return candidateURL.standardizedFileURL
+        }
+
+        throw ProjectFileError.destinationAlreadyExists
+    }
+
     nonisolated private static func isValidFileName(_ name: String) -> Bool {
         !name.isEmpty
             && name != "."
@@ -204,10 +299,20 @@ struct ProjectFileService: Sendable {
             && !name.contains("\0")
     }
 
+    // atomic書き込み(rename置換)がsymlink自体を通常ファイルで潰さないよう、実体パスへ解決してから書く。
+    @discardableResult
+    nonisolated private static func writeUTF8FileSnapshot(_ text: String, to url: URL) throws -> ProjectFileSignature? {
+        let targetURL = url.resolvingSymlinksInPath()
+        try text.write(to: targetURL, atomically: true, encoding: .utf8)
+        return try fileSignatureSnapshot(at: targetURL)
+    }
+
+    // attributesOfItemは末尾のsymlinkを辿らないため、リンク先の実体を見るよう解決してから取得する
+    // (symlinkされた開いているファイルが「削除済み」扱いになったり、CAS書き込みが常に失敗するのを防ぐ)。
     nonisolated private static func fileSignatureSnapshot(at url: URL) throws -> ProjectFileSignature? {
         do {
             let attributes = try FileManager.default.attributesOfItem(
-                atPath: url.path(percentEncoded: false)
+                atPath: url.resolvingSymlinksInPath().path(percentEncoded: false)
             )
 
             guard attributes[.type] as? FileAttributeType == .typeRegular else {
@@ -253,39 +358,18 @@ struct ProjectFileService: Sendable {
                 return ProjectFileSearchEntry(
                     url: fileURL,
                     fileName: fileURL.lastPathComponent,
-                    relativeParentPath: Self.relativePath(
+                    relativeParentPath: FileURLRewriter.relativePath(
                         from: rootURL,
                         to: fileURL.deletingLastPathComponent().standardizedFileURL
-                    )
+                    ) ?? ""
                 )
             }
     }
-
-    nonisolated private static func relativePath(from rootURL: URL, to targetURL: URL) -> String {
-        let rootPath = normalizedDirectoryPath(rootURL)
-        let targetPath = normalizedDirectoryPath(targetURL)
-
-        guard targetPath != rootPath else { return "" }
-
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-        guard targetPath.hasPrefix(rootPrefix) else {
-            return targetURL.lastPathComponent
-        }
-
-        return String(targetPath.dropFirst(rootPrefix.count))
-    }
-
-    nonisolated private static func normalizedDirectoryPath(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
-        }
-
-        return path
-    }
 }
 
+// ファイル名検索index用の列挙。ignore判定はrgのネイティブ解釈に委ねる（`--no-ignore` を渡さない）。
+// 同じファイル内のツリー表示（loadDirectorySnapshot）はGitIgnoreMatcherでノード単位に判定する
+// （役割分担は GitIgnoreMatcher.swift 冒頭を参照）。
 nonisolated private enum RipgrepFileListRunner {
     static func run(executableURL: URL, currentDirectoryURL: URL) throws -> Data {
         let process = Process()
@@ -317,15 +401,23 @@ nonisolated private enum RipgrepFileListRunner {
             terminationSemaphore.signal()
         }
 
+        let stdoutEOFSemaphore = DispatchSemaphore(value: 0)
+        let stderrEOFSemaphore = DispatchSemaphore(value: 0)
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stdoutEOFSemaphore.signal()
+            } else {
                 stdout.append(data)
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty {
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                stderrEOFSemaphore.signal()
+            } else {
                 stderr.append(data)
             }
         }
@@ -339,15 +431,17 @@ nonisolated private enum RipgrepFileListRunner {
 
         while terminationSemaphore.wait(timeout: .now() + 0.05) == .timedOut {
             if Task.isCancelled {
-                process.terminate()
-                process.waitUntilExit()
+                SafeProcessLauncher.terminateWithEscalation(process)
                 cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
                 throw CancellationError()
             }
         }
 
+        // 終了直前のバースト出力をハンドラがEOFまで読み切るのを待ってから結果を確定する。
+        // 孫プロセスがpipeを保持し続ける場合に備えて待ちは有限にする。
+        _ = stdoutEOFSemaphore.wait(timeout: .now() + 2)
+        _ = stderrEOFSemaphore.wait(timeout: .now() + 2)
         cleanup(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
-        appendRemainingData(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe, stdout: stdout, stderr: stderr)
 
         guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
             let message = String(data: stderr.data(), encoding: .utf8)?
@@ -361,23 +455,6 @@ nonisolated private enum RipgrepFileListRunner {
     private static func cleanup(stdoutPipe: Pipe, stderrPipe: Pipe) {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
-    }
-
-    private static func appendRemainingData(
-        stdoutPipe: Pipe,
-        stderrPipe: Pipe,
-        stdout: ProjectFileSearchLockedData,
-        stderr: ProjectFileSearchLockedData
-    ) {
-        let remainingStdout = stdoutPipe.fileHandleForReading.availableData
-        if !remainingStdout.isEmpty {
-            stdout.append(remainingStdout)
-        }
-
-        let remainingStderr = stderrPipe.fileHandleForReading.availableData
-        if !remainingStderr.isEmpty {
-            stderr.append(remainingStderr)
-        }
     }
 }
 

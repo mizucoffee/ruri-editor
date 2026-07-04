@@ -61,7 +61,7 @@ struct CodeUsageResult: Identifiable, Equatable, Sendable {
 
         return CodeUsageResult(
             url: url.standardizedFileURL,
-            relativePath: relativePath(from: projectURL, to: url),
+            relativePath: FileURLRewriter.relativePath(from: projectURL, to: url) ?? url.lastPathComponent,
             fileName: url.lastPathComponent,
             lineNumber: lineNumber(at: matchLocation, in: string),
             column: columnNumber(in: text, lineStartLocation: lineRange.location, matchLocation: matchLocation),
@@ -138,36 +138,6 @@ struct CodeUsageResult: Identifiable, Equatable, Sendable {
         return text[lineStartIndex..<matchIndex].count + 1
     }
 
-    nonisolated private static func relativePath(from rootURL: URL, to targetURL: URL) -> String {
-        let rootPath = normalizedDirectoryPath(rootURL)
-        let targetPath = targetURL.standardizedFileURL.path(percentEncoded: false)
-        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : "\(rootPath)/"
-
-        guard targetPath.hasPrefix(rootPrefix) else {
-            return targetURL.lastPathComponent
-        }
-
-        return String(targetPath.dropFirst(rootPrefix.count))
-    }
-
-    nonisolated private static func normalizedDirectoryPath(_ url: URL) -> String {
-        var path = url.standardizedFileURL.path(percentEncoded: false)
-
-        while path.count > 1 && path.hasSuffix("/") {
-            path.removeLast()
-        }
-
-        return path
-    }
-}
-
-private extension NSRange {
-    nonisolated func clamped(toUTF16Length length: Int) -> NSRange {
-        let rawLocation = location == NSNotFound ? length : location
-        let clampedLocation = min(max(0, rawLocation), length)
-        let maxLength = max(0, length - clampedLocation)
-        return NSRange(location: clampedLocation, length: min(max(0, self.length), maxLength))
-    }
 }
 
 private extension String {

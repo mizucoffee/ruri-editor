@@ -9,10 +9,10 @@ struct RuriWindowRoot: View {
     let initialProjectURL: URL?
 
     @Environment(\.openWindow) private var openWindow
-    @StateObject private var editor = EditorState()
+    @StateObject private var editor = EditorViewModel()
     @StateObject private var editorRuntimeStore = EditorRuntimeStore()
-    @StateObject private var terminalState = TerminalState()
-    @StateObject private var runConfigurationState = RunConfigurationState()
+    @StateObject private var terminalState = TerminalViewModel()
+    @StateObject private var runConfigurationState = RunConfigurationViewModel()
     @StateObject private var textSearch = ProjectTextSearchViewModel()
     @StateObject private var tabInputSettings = EditorTabInputSettingsStore()
     @StateObject private var lineWrappingSettings = EditorLineWrappingSettingsStore()

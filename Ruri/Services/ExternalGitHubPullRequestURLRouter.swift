@@ -12,16 +12,16 @@ import Foundation
 final class ExternalGitHubPullRequestURLRouter {
     static let shared = ExternalGitHubPullRequestURLRouter()
 
-    private var editors: [WeakEditorState] = []
+    private var editors: [WeakEditorViewModel] = []
     private var shouldCloseTransientEmptyWindows = false
 
     private init() {}
 
-    func register(_ editor: EditorState) {
+    func register(_ editor: EditorViewModel) {
         register(editor, window: nil)
     }
 
-    func register(_ editor: EditorState, window: NSWindow?) {
+    func register(_ editor: EditorViewModel, window: NSWindow?) {
         pruneEditors()
         if let existing = editors.first(where: { $0.editor === editor }) {
             if let window {
@@ -31,11 +31,11 @@ final class ExternalGitHubPullRequestURLRouter {
             return
         }
 
-        editors.append(WeakEditorState(editor: editor, window: window))
+        editors.append(WeakEditorViewModel(editor: editor, window: window))
         closeTransientEmptyWindowsIfNeeded()
     }
 
-    func unregister(_ editor: EditorState) {
+    func unregister(_ editor: EditorViewModel) {
         editors.removeAll { $0.editor == nil || $0.editor === editor }
     }
 
@@ -60,11 +60,11 @@ final class ExternalGitHubPullRequestURLRouter {
         await fallbackEditor()?.openExternalGitHubPullRequestURL(url)
     }
 
-    private func fallbackEditor() -> EditorState? {
+    private func fallbackEditor() -> EditorViewModel? {
         liveEditors().first
     }
 
-    private func liveEditors() -> [EditorState] {
+    private func liveEditors() -> [EditorViewModel] {
         pruneEditors()
         return editors.compactMap(\.editor)
     }
@@ -101,11 +101,11 @@ final class ExternalGitHubPullRequestURLRouter {
     }
 }
 
-private final class WeakEditorState {
-    weak var editor: EditorState?
+private final class WeakEditorViewModel {
+    weak var editor: EditorViewModel?
     weak var window: NSWindow?
 
-    init(editor: EditorState, window: NSWindow?) {
+    init(editor: EditorViewModel, window: NSWindow?) {
         self.editor = editor
         self.window = window
     }

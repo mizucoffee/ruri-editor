@@ -10,16 +10,15 @@ import Foundation
 final class CodingAgentStatusWatcher {
     typealias ChangeHandler = @MainActor (URL) -> Void
 
-    private let debounceNanoseconds: UInt64
     private let changeHandler: ChangeHandler
+    private let debouncer: PerKeyDebouncer<URL>
     private var streamsByDirectoryURL: [URL: FSEventStreamRef] = [:]
-    private var debounceTasksByDirectoryURL: [URL: Task<Void, Never>] = [:]
 
     init(
         debounceNanoseconds: UInt64 = 50_000_000,
         changeHandler: @escaping ChangeHandler
     ) {
-        self.debounceNanoseconds = debounceNanoseconds
+        self.debouncer = PerKeyDebouncer(delayNanoseconds: debounceNanoseconds)
         self.changeHandler = changeHandler
     }
 
@@ -93,7 +92,7 @@ final class CodingAgentStatusWatcher {
 
     private func stopWatching(_ directoryURL: URL) {
         let standardizedURL = directoryURL.standardizedFileURL
-        debounceTasksByDirectoryURL.removeValue(forKey: standardizedURL)?.cancel()
+        debouncer.cancel(for: standardizedURL)
 
         guard let stream = streamsByDirectoryURL.removeValue(forKey: standardizedURL) else {
             return
@@ -120,12 +119,12 @@ final class CodingAgentStatusWatcher {
     private func directoriesContaining(paths: [String]) -> Set<URL> {
         let directoryPairs = streamsByDirectoryURL.keys.map { directoryURL in
             let standardizedURL = directoryURL.standardizedFileURL
-            return (standardizedURL, normalizedDirectoryPath(standardizedURL))
+            return (standardizedURL, FileURLRewriter.normalizedPath(standardizedURL))
         }
 
         var changedDirectoryURLs = Set<URL>()
         for eventPath in paths {
-            let normalizedEventPath = normalizedPath(eventPath)
+            let normalizedEventPath = FileURLRewriter.normalizedPath(eventPath)
             for (directoryURL, directoryPath) in directoryPairs where contains(
                 eventPath: normalizedEventPath,
                 in: directoryPath
@@ -137,39 +136,14 @@ final class CodingAgentStatusWatcher {
     }
 
     private func scheduleChangeNotification(for directoryURL: URL) {
-        debounceTasksByDirectoryURL[directoryURL]?.cancel()
-        debounceTasksByDirectoryURL[directoryURL] = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: self?.debounceNanoseconds ?? 50_000_000)
-            } catch {
-                return
-            }
-
-            await MainActor.run {
-                guard let self else { return }
-                self.debounceTasksByDirectoryURL[directoryURL] = nil
-                self.changeHandler(directoryURL)
-            }
+        debouncer.schedule(for: directoryURL) { [weak self] in
+            self?.changeHandler(directoryURL)
         }
     }
 
     private func contains(eventPath: String, in directoryPath: String) -> Bool {
         eventPath == directoryPath
             || eventPath.hasPrefix(directoryPath.hasSuffix("/") ? directoryPath : "\(directoryPath)/")
-    }
-
-    private func normalizedDirectoryPath(_ url: URL) -> String {
-        normalizedPath(url.standardizedFileURL.path(percentEncoded: false))
-    }
-
-    private func normalizedPath(_ path: String) -> String {
-        var normalizedPath = NSString(string: path).standardizingPath
-
-        while normalizedPath.count > 1 && normalizedPath.hasSuffix("/") {
-            normalizedPath.removeLast()
-        }
-
-        return normalizedPath
     }
 }
 

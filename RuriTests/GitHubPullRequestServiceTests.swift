@@ -40,6 +40,22 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         XCTAssertEqual(calls.first?.currentDirectoryURL, rootURL.standardizedFileURL)
     }
 
+    func testPullRequestRejectsDashPrefixedBranchNameWithoutRunningCommand() async {
+        let rootURL = URL(filePath: "/tmp/ruri-pr-service", directoryHint: .isDirectory)
+        let runner = RecordingGitHubCommandRunner(results: [])
+        let service = GitHubPullRequestService(executableURL: ghURL, commandRunner: runner)
+
+        let status = await service.pullRequestStatus(
+            forBranch: "--repo=attacker/repo",
+            baseBranch: "main",
+            openedRootURL: rootURL
+        )
+
+        XCTAssertNil(status)
+        let calls = await runner.calls()
+        XCTAssertTrue(calls.isEmpty)
+    }
+
     func testPullRequestReturnsDraftPullRequestForDraftPullRequest() async {
         let rootURL = URL(filePath: "/tmp/ruri-pr-service", directoryHint: .isDirectory)
         let runner = RecordingGitHubCommandRunner(results: [

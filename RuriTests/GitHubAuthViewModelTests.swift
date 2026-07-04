@@ -19,14 +19,16 @@ final class GitHubAuthViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.status, .authenticated(username: "mizucoffee"))
     }
 
-    func testLogInIgnoresDuplicateRequestsWhileAuthenticating() async {
+    func testLogInIgnoresDuplicateRequestsWhileAuthenticating() async throws {
         let service = BlockingGitHubAuthService(statusAfterLogin: .authenticated(username: "mizucoffee"))
         let viewModel = GitHubAuthViewModel(service: service)
 
         let firstTask = Task { @MainActor in
             await viewModel.logIn()
         }
-        await service.waitForLoginCallCount(1)
+        try await TestSupport.waitUntil("login call count of 1") {
+            await service.loginCallCount() >= 1
+        }
 
         let secondTask = Task { @MainActor in
             await viewModel.logIn()
@@ -137,12 +139,6 @@ private actor BlockingGitHubAuthService: GitHubAuthServiceProtocol {
 
     func loginCallCount() -> Int {
         storedLoginCallCount
-    }
-
-    func waitForLoginCallCount(_ expectedCount: Int) async {
-        while storedLoginCallCount < expectedCount {
-            await Task.yield()
-        }
     }
 
     func completeLogin() {

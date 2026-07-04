@@ -1,5 +1,5 @@
 //
-//  TerminalState.swift
+//  TerminalViewModel.swift
 //  ruri
 //
 
@@ -8,7 +8,7 @@ import Combine
 import Foundation
 
 @MainActor
-final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
+final class TerminalViewModel: ObservableObject, TerminalRuntimeDelegate {
     @Published private(set) var activeWorkspaceURL: URL?
     @Published private(set) var tabs: [TerminalTabSnapshot] = []
     @Published private(set) var selectedTabID: TerminalTab.ID?
@@ -23,6 +23,8 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     private var agentStatusDirectoryURLsByWorkspaceID: [ProjectWorkspaceSnapshot.ID: URL] = [:]
     private var agentStatusesByTabID: [TerminalTab.ID: CodingAgentStatus] = [:]
     private var unreadAgentStatusKeysByTabID: [TerminalTab.ID: String] = [:]
+    private var notifiedAgentTerminalIDs: Set<TerminalTab.ID> = []
+    private var applicationActivationCancellable: AnyCancellable?
     private lazy var agentStatusWatcher = CodingAgentStatusWatcher { [weak self] _ in
         Task { @MainActor in
             await self?.refreshAgentStatuses()
@@ -31,18 +33,26 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     private let shellResolver: TerminalShellResolver
     private let agentStatusStore: any CodingAgentStatusStoring
     private let agentStatusNotifier: any CodingAgentStatusNotifying
+    private let isApplicationActive: () -> Bool
     private var openFileRequest: (TerminalFileOpenRequest) -> Void
 
     init(
         shellResolver: TerminalShellResolver? = nil,
         agentStatusStore: any CodingAgentStatusStoring = CodingAgentStatusStore(),
         agentStatusNotifier: any CodingAgentStatusNotifying = CodingAgentStatusNotifier(),
+        isApplicationActive: @escaping () -> Bool = { NSApplication.shared.isActive },
         openFileRequest: @escaping (TerminalFileOpenRequest) -> Void = { _ in }
     ) {
         self.shellResolver = shellResolver ?? TerminalShellResolver()
         self.agentStatusStore = agentStatusStore
         self.agentStatusNotifier = agentStatusNotifier
+        self.isApplicationActive = isApplicationActive
         self.openFileRequest = openFileRequest
+        applicationActivationCancellable = NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.markVisibleSelectedTerminalSeen()
+            }
     }
 
     deinit {
@@ -105,6 +115,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
             agentStatusDirectoryURLsByWorkspaceID = [:]
             agentStatusesByTabID = [:]
             unreadAgentStatusKeysByTabID = [:]
+            removeDeliveredAgentNotifications(for: notifiedAgentTerminalIDs)
             updateAgentStatusWatches()
             publishWorkspaceSnapshots()
             return
@@ -200,6 +211,25 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         publishWorkspaceSnapshots()
     }
 
+    func selectTab(atShortcutNumber number: Int, requestsFocus: Bool = false) {
+        guard let activeWorkspaceID,
+              var workspace = workspaces[activeWorkspaceID] else {
+            return
+        }
+
+        guard let selectedTabID = workspace.selectTab(atShortcutNumber: number) else {
+            return
+        }
+
+        workspaces[activeWorkspaceID] = workspace
+        if requestsFocus {
+            focusRequest = TerminalFocusRequest(tabID: selectedTabID)
+        }
+        markVisibleSelectedTerminalSeen()
+        publishActiveWorkspace()
+        publishWorkspaceSnapshots()
+    }
+
     func revealTab(
         _ tabID: TerminalTab.ID,
         in workspaceID: ProjectWorkspaceSnapshot.ID,
@@ -253,6 +283,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
             agentStatusesByTabID.removeValue(forKey: tab.id)
             unreadAgentStatusKeysByTabID.removeValue(forKey: tab.id)
         }
+        removeDeliveredAgentNotifications(for: Set(workspace.tabs.map(\.id)))
         agentStatusDirectoryURLsByWorkspaceID.removeValue(forKey: id)
 
         if wasActiveWorkspace {
@@ -278,6 +309,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
             closeRuntime(for: tab.id)
             agentStatusesByTabID.removeValue(forKey: tab.id)
             unreadAgentStatusKeysByTabID.removeValue(forKey: tab.id)
+            removeDeliveredAgentNotifications(for: [tab.id])
             closeConfirmation = nil
             publishActiveWorkspace()
             publishWorkspaceSnapshots()
@@ -301,6 +333,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         closeRuntime(for: closedTab.id)
         agentStatusesByTabID.removeValue(forKey: closedTab.id)
         unreadAgentStatusKeysByTabID.removeValue(forKey: closedTab.id)
+        removeDeliveredAgentNotifications(for: [closedTab.id])
         closeConfirmation = nil
         publishActiveWorkspace()
         publishWorkspaceSnapshots()
@@ -352,6 +385,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         closeRuntime(for: closedTab.id)
         agentStatusesByTabID.removeValue(forKey: closedTab.id)
         unreadAgentStatusKeysByTabID.removeValue(forKey: closedTab.id)
+        removeDeliveredAgentNotifications(for: [closedTab.id])
         if closeConfirmation?.tabID == closedTab.id {
             closeConfirmation = nil
         }
@@ -370,6 +404,11 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
     func terminalRuntimeDidRequestCloseTab(_ runtime: TerminalRuntime) {
         guard runtime.workspaceID == activeWorkspaceID else { return }
         requestCloseTab(runtime.tabID)
+    }
+
+    func terminalRuntime(_ runtime: TerminalRuntime, didRequestSelectTabAtShortcutNumber number: Int) {
+        guard runtime.workspaceID == activeWorkspaceID else { return }
+        selectTab(atShortcutNumber: number, requestsFocus: true)
     }
 
     func terminalRuntime(_ runtime: TerminalRuntime, didRequestOpenFile request: TerminalFileOpenRequest) {
@@ -454,6 +493,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
             workspace.tabs.map(\.id)
         })
         guard !openTerminalIDs.isEmpty else {
+            removeDeliveredAgentNotifications(for: notifiedAgentTerminalIDs)
             guard !agentStatusesByTabID.isEmpty || !unreadAgentStatusKeysByTabID.isEmpty else {
                 return
             }
@@ -487,7 +527,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         )
         updateUnreadAgentStatuses(with: refreshedStatuses, openTerminalIDs: openTerminalIDs)
         agentStatusesByTabID = refreshedStatuses
-        markVisibleSelectedTerminalSeen()
+        markVisibleSelectedTerminalSeen(removingDeliveredNotifications: false)
 
         guard previousStatuses != agentStatusesByTabID ||
               previousUnreadStatusKeys != unreadAgentStatusKeysByTabID else {
@@ -508,6 +548,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
                 continue
             }
 
+            notifiedAgentTerminalIDs.insert(tabID)
             let context = notificationContext(for: tabID, status: status)
             Task { [agentStatusNotifier] in
                 await agentStatusNotifier.notify(status: status, context: context)
@@ -544,6 +585,7 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         for (tabID, status) in refreshedStatuses {
             guard status.state.isUnreadEligible else {
                 unreadAgentStatusKeysByTabID.removeValue(forKey: tabID)
+                removeDeliveredAgentNotifications(for: [tabID])
                 continue
             }
 
@@ -555,7 +597,10 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         }
     }
 
-    private func markVisibleSelectedTerminalSeen() {
+    // status refreshはユーザー操作ではないため、refresh経由では未読ドットだけ消して配信済み通知を残す。
+    // 表示中のターミナルへ出した直後の通知を後続refreshが取り下げるのを防ぐためで、
+    // 配信済み通知の削除はタブ選択・最小化解除・アプリのアクティブ化などの操作時に行う。
+    private func markVisibleSelectedTerminalSeen(removingDeliveredNotifications: Bool = true) {
         guard !isMinimized,
               let activeWorkspaceID,
               let selectedTabID = workspaces[activeWorkspaceID]?.selectedTabID else {
@@ -563,5 +608,18 @@ final class TerminalState: ObservableObject, TerminalRuntimeDelegate {
         }
 
         unreadAgentStatusKeysByTabID.removeValue(forKey: selectedTabID)
+        if removingDeliveredNotifications, isApplicationActive() {
+            removeDeliveredAgentNotifications(for: [selectedTabID])
+        }
+    }
+
+    private func removeDeliveredAgentNotifications(for tabIDs: Set<TerminalTab.ID>) {
+        let terminalIDs = notifiedAgentTerminalIDs.intersection(tabIDs)
+        guard !terminalIDs.isEmpty else { return }
+
+        notifiedAgentTerminalIDs.subtract(terminalIDs)
+        Task { [agentStatusNotifier] in
+            await agentStatusNotifier.removeDeliveredNotifications(forTerminalIDs: terminalIDs)
+        }
     }
 }

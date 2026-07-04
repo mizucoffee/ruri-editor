@@ -1,5 +1,5 @@
 //
-//  EditorStateWorkspaceTests.swift
+//  EditorViewModelWorkspaceTests.swift
 //  ruriTests
 //
 
@@ -7,7 +7,7 @@ import XCTest
 @testable import ruri
 
 @MainActor
-final class EditorStateWorkspaceTests: XCTestCase {
+final class EditorViewModelWorkspaceTests: XCTestCase {
     private let fileManager = FileManager.default
 
     func testOpenProjectRequiresNewWindowForDifferentFolder() async throws {
@@ -18,7 +18,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
             try? fileManager.removeItem(at: secondRootURL)
         }
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
 
         let firstResult = await editor.openProject(firstRootURL)
         let secondResult = await editor.openProject(secondRootURL)
@@ -34,7 +34,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
 
         await editor.openProject(rootURL)
         let result = await editor.openProject(rootURL)
@@ -50,7 +50,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         defer { try? fileManager.removeItem(at: parentURL) }
 
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
 
@@ -64,7 +64,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         defer { try? fileManager.removeItem(at: parentURL) }
 
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
 
@@ -88,8 +88,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             GitWorktreeInfo(rootURL: baseURL, branch: .branch("main"), headRevision: nil, kind: .main),
             GitWorktreeInfo(rootURL: worktreeURL, branch: .branch("feature/sidebar"), headRevision: nil, kind: .linked)
         ]
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     worktreeURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: worktreeURL,
@@ -113,7 +113,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         editor.setEditorMode(.review)
@@ -139,8 +139,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: repositorySnapshot
                 ],
@@ -182,7 +182,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseRevision: "abc123",
             files: []
         )
-        let gitService = EditorStateWorkspaceMockGitService(
+        let gitService = EditorViewModelWorkspaceMockGitService(
             snapshots: [
                 rootURL.standardizedFileURL: repositorySnapshot
             ],
@@ -190,7 +190,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 rootURL.standardizedFileURL: reviewSnapshot
             ]
         )
-        let editor = EditorState(
+        let editor = EditorViewModel(
             gitService: gitService,
             isFileWatchingEnabled: false
         )
@@ -268,7 +268,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
             requestedRelativePaths: ["Changed.kt"],
             files: [updatedFile]
         )
-        let gitService = EditorStateWorkspaceMockGitService(
+        let gitService = EditorViewModelWorkspaceMockGitService(
             snapshots: [
                 rootURL.standardizedFileURL: repositorySnapshot
             ],
@@ -290,7 +290,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 rootURL.standardizedFileURL: reviewUpdate
             ]
         )
-        let editor = EditorState(
+        let editor = EditorViewModel(
             gitService: gitService,
             isFileWatchingEnabled: false
         )
@@ -309,7 +309,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
 
         XCTAssertEqual(gitService.reviewDiffCalls().count, 1)
         XCTAssertEqual(gitService.reviewDiffUpdateCalls(), [
-            EditorStateWorkspaceMockGitService.ReviewDiffUpdateCall(
+            EditorViewModelWorkspaceMockGitService.ReviewDiffUpdateCall(
                 base: .uncommitted,
                 options: .default,
                 fileURLs: [changedURL.standardizedFileURL],
@@ -335,8 +335,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: rootURL,
@@ -378,8 +378,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: repositorySnapshot
                 ],
@@ -411,12 +411,12 @@ final class EditorStateWorkspaceTests: XCTestCase {
             rootURL: rootURL,
             branch: .branch(currentBranch)
         )
-        let gitService = EditorStateWorkspaceMockGitService(
+        let gitService = EditorViewModelWorkspaceMockGitService(
             snapshots: [
                 rootURL.standardizedFileURL: repositorySnapshot
             ]
         )
-        let firstEditor = EditorState(
+        let firstEditor = EditorViewModel(
             gitService: gitService,
             isFileWatchingEnabled: false
         )
@@ -429,7 +429,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
             metadataDirectoryURL: rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
         )
 
-        let secondEditor = EditorState(
+        let secondEditor = EditorViewModel(
             gitService: gitService,
             isFileWatchingEnabled: false
         )
@@ -457,8 +457,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             mergeBaseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: repositorySnapshot
                 ],
@@ -504,8 +504,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             mergeBaseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: repositorySnapshot
                 ],
@@ -552,7 +552,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-am", "feature"], in: rootURL)
         try runGit(["switch", "main"], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         XCTAssertEqual(editor.gitSnapshot?.branch.displayName, "main")
@@ -580,7 +580,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "initial"], in: rootURL)
         try runGit(["worktree", "add", "-b", "linked", worktreeURL.path(percentEncoded: false)], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         let result = await editor.openProject(rootURL)
 
@@ -627,8 +627,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             worktreeRootURLs: worktreeRootURLs,
             worktrees: worktrees
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     firstRootURL.standardizedFileURL: firstSnapshot,
                     secondRootURL.standardizedFileURL: secondSnapshot
@@ -662,13 +662,13 @@ final class EditorStateWorkspaceTests: XCTestCase {
             url: URL(string: "https://github.com/owner/repo/pull/42")!,
             lifecycleState: .open
         )
-        let gitHubPullRequestService = EditorStateWorkspaceMockGitHubPullRequestService(pullRequests: [
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
             rootURL.standardizedFileURL: [
                 "feature/status-pr": .pullRequest(pullRequest)
             ]
         ])
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: rootURL,
@@ -686,7 +686,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         XCTAssertEqual(publishedPullRequest, .pullRequest(pullRequest))
         let calls = await gitHubPullRequestService.calls()
         XCTAssertEqual(calls, [
-            EditorStateWorkspaceMockGitHubPullRequestService.Call(
+            EditorViewModelWorkspaceMockGitHubPullRequestService.Call(
                 branchName: "feature/status-pr",
                 baseBranchName: nil,
                 openedRootURL: rootURL.standardizedFileURL
@@ -734,13 +734,13 @@ final class EditorStateWorkspaceTests: XCTestCase {
             url: URL(string: "https://github.com/owner/repo/pull/77")!,
             lifecycleState: .open
         )
-        let gitHubPullRequestService = EditorStateWorkspaceMockGitHubPullRequestService(pullRequests: [
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
             worktreeURL.standardizedFileURL: [
                 "feature-one": .pullRequest(pullRequest)
             ]
         ])
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: baseSnapshot,
                     worktreeURL.standardizedFileURL: worktreeSnapshot
@@ -795,13 +795,13 @@ final class EditorStateWorkspaceTests: XCTestCase {
             headBranch: "feature-one",
             url: URL(string: "https://github.com/owner/repo/compare/develop...feature-one?expand=1")!
         )
-        let gitHubPullRequestService = EditorStateWorkspaceMockGitHubPullRequestService(pullRequests: [
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
             worktreeURL.standardizedFileURL: [
                 "feature-one": .create(creationLink)
             ]
         ])
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: baseURL,
@@ -858,12 +858,12 @@ final class EditorStateWorkspaceTests: XCTestCase {
             GitWorktreeInfo(rootURL: baseURL, branch: .branch("main"), headRevision: nil, kind: .main),
             GitWorktreeInfo(rootURL: worktreeURL, branch: .branch("feature-loading"), headRevision: nil, kind: .linked)
         ]
-        let gitHubPullRequestService = EditorStateWorkspaceMockGitHubPullRequestService(
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(
             pullRequests: [:],
             responseDelayNanoseconds: 300_000_000
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: baseURL,
@@ -913,9 +913,9 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
 
-        let gitHubPullRequestService = EditorStateWorkspaceMockGitHubPullRequestService(pullRequests: [:])
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [:])
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: rootURL,
@@ -956,8 +956,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseBranchName: "main",
             headRepository: GitHubRepositoryIdentity(owner: "owner", name: "repo")
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: makeGitSnapshot(
                         rootURL: baseURL,
@@ -989,7 +989,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
                     baseURL.standardizedFileURL: [GitHubRepositoryIdentity(owner: "owner", name: "repo")]
                 ]
             ),
-            githubPullRequestService: EditorStateWorkspaceMockGitHubPullRequestService(
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(
                 pullRequests: [:],
                 pullRequestDetailsByRootAndNumber: [
                     baseURL.standardizedFileURL: [123: pullRequestDetails]
@@ -1018,8 +1018,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             baseBranchName: "main",
             headRepository: GitHubRepositoryIdentity(owner: "owner", name: "repo")
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch("main"))
                 ],
@@ -1027,7 +1027,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
                     rootURL.standardizedFileURL: [GitHubRepositoryIdentity(owner: "owner", name: "repo")]
                 ]
             ),
-            githubPullRequestService: EditorStateWorkspaceMockGitHubPullRequestService(
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(
                 pullRequests: [:],
                 pullRequestDetailsByRootAndNumber: [
                     rootURL.standardizedFileURL: [123: pullRequestDetails]
@@ -1079,7 +1079,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
             repositoryRootURL: rootURL
         )
         let initializationService = RecordingWorktreeInitializationService()
-        let editor = EditorState(
+        let editor = EditorViewModel(
             worktreeInitializationService: initializationService,
             isFileWatchingEnabled: false
         )
@@ -1147,11 +1147,11 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 .appending(path: "worktrees/feature-one", directoryHint: .isDirectory),
             gitCommonDirectoryURL: commonGitDirectoryURL
         )
-        let gitService = RecordingEditorStateWorkspaceGitService(snapshots: [
+        let gitService = RecordingEditorViewModelWorkspaceGitService(snapshots: [
             baseURL.standardizedFileURL: baseSnapshot,
             worktreeURL.standardizedFileURL: worktreeSnapshot
         ])
-        let editor = EditorState(gitService: gitService, isFileWatchingEnabled: false)
+        let editor = EditorViewModel(gitService: gitService, isFileWatchingEnabled: false)
 
         await editor.openProject(baseURL)
         gitService.resetRepositoryStatusURLs()
@@ -1205,11 +1205,11 @@ final class EditorStateWorkspaceTests: XCTestCase {
             gitDirectoryURL: linkedGitDirectoryURL,
             gitCommonDirectoryURL: commonGitDirectoryURL
         )
-        let gitService = RecordingEditorStateWorkspaceGitService(snapshots: [
+        let gitService = RecordingEditorViewModelWorkspaceGitService(snapshots: [
             baseURL.standardizedFileURL: baseSnapshot,
             worktreeURL.standardizedFileURL: worktreeSnapshot
         ])
-        let editor = EditorState(gitService: gitService, isFileWatchingEnabled: false)
+        let editor = EditorViewModel(gitService: gitService, isFileWatchingEnabled: false)
 
         await editor.openProject(baseURL)
         gitService.resetRepositoryStatusURLs()
@@ -1270,8 +1270,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
             mergeBaseRevision: "abc123",
             files: []
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: baseSnapshot,
                     worktreeURL.standardizedFileURL: worktreeSnapshot
@@ -1365,8 +1365,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 ))
             ]
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: baseSnapshot,
                     worktreeURL.standardizedFileURL: worktreeSnapshot
@@ -1487,8 +1487,8 @@ final class EditorStateWorkspaceTests: XCTestCase {
                 ))
             ]
         )
-        let editor = EditorState(
-            gitService: EditorStateWorkspaceMockGitService(
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
                 snapshots: [
                     baseURL.standardizedFileURL: baseSnapshot,
                     worktreeURL.standardizedFileURL: worktreeSnapshot
@@ -1580,7 +1580,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "initial"], in: rootURL)
         try runGit(["worktree", "add", "-b", "linked", worktreeURL.path(percentEncoded: false)], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         let result = await editor.openProject(worktreeURL)
 
@@ -1605,7 +1605,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["add", "Head.txt"], in: rootURL)
         try runGit(["commit", "-m", "head"], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         let workspaceID = try await editor.createWorktree(named: "feature-one")
@@ -1641,7 +1641,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["add", "LinkedOnly.txt"], in: linkedURL)
         try runGit(["commit", "-m", "linked only"], in: linkedURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         editor.selectProject(linkedURL.standardizedFileURL)
@@ -1679,7 +1679,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "remote branch"], in: seedURL)
         try runGit(["push", "-u", "origin", "feature-one"], in: seedURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         let remoteBranches = try await editor.remoteBranches(refresh: true)
@@ -1711,7 +1711,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "base"], in: rootURL)
 
         let initializationService = RecordingWorktreeInitializationService()
-        let editor = EditorState(
+        let editor = EditorViewModel(
             worktreeInitializationService: initializationService,
             isFileWatchingEnabled: false
         )
@@ -1747,7 +1747,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let initializationService = RecordingWorktreeInitializationService(
             error: WorktreeInitializationError.processFailed("boom")
         )
-        let editor = EditorState(
+        let editor = EditorViewModel(
             worktreeInitializationService: initializationService,
             isFileWatchingEnabled: false
         )
@@ -1780,7 +1780,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "base"], in: rootURL)
         try runGit(["worktree", "add", "-b", "linked", linkedURL.path(percentEncoded: false)], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         editor.selectProject(linkedURL.standardizedFileURL)
@@ -1813,7 +1813,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "base"], in: rootURL)
         try runGit(["worktree", "add", "-b", "linked", linkedURL.path(percentEncoded: false)], in: rootURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(linkedURL)
         let result = try await editor.deleteWorktree(linkedURL.standardizedFileURL)
@@ -1837,7 +1837,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: thirdURL, withIntermediateDirectories: true)
         try "leaf".write(to: thirdURL.appending(path: "Leaf.txt"), atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.toggleDirectory(firstURL)
@@ -1867,7 +1867,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: secondURL, withIntermediateDirectories: true)
         try "readme".write(to: firstURL.appending(path: "README.md"), atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.toggleDirectory(firstURL)
@@ -1891,7 +1891,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: secondURL, withIntermediateDirectories: true)
         try "leaf".write(to: secondURL.appending(path: "Leaf.txt"), atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         editor.selectFileTreeNode(firstURL)
@@ -1917,7 +1917,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try fileManager.createDirectory(at: nestedURL, withIntermediateDirectories: true)
         try "feature".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
@@ -1941,7 +1941,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let fileURL = rootURL.appending(path: "README.md")
         try "readme".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
@@ -1971,7 +1971,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try runGit(["commit", "-m", "initial"], in: rootURL)
         try "changed edited\n".write(to: changedURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
 
@@ -2000,7 +2000,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first original".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second original".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
 
         await editor.openProject(firstRootURL)
         await editor.openFile(firstFileURL)
@@ -2029,7 +2029,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first original".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second original".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
 
         await editor.openProject(firstRootURL)
         await editor.openFile(firstFileURL)
@@ -2052,7 +2052,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2075,7 +2075,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2101,7 +2101,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try secondText.write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2130,7 +2130,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let binaryFileURL = rootURL.appending(path: "Binary.bin")
         try Data([0xFF]).write(to: binaryFileURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         let closedDocument = await editor.openFile(binaryFileURL)
@@ -2150,7 +2150,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "note".write(to: textFileURL, atomically: true, encoding: .utf8)
         try Data([0xFF]).write(to: binaryFileURL)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(textFileURL)
@@ -2182,7 +2182,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try targetText.write(to: targetURL, atomically: true, encoding: .utf8)
 
         let targetRange = (targetText as NSString).range(of: "Target")
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         try await waitForSymbolIndexReady(editor)
@@ -2245,7 +2245,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let unsavedText = "class Target {}\nclass Source { Target editedTarget; }\n"
         try savedText.write(to: sourceURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         try await waitForSymbolIndexReady(editor)
@@ -2280,7 +2280,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try sourceText.write(to: sourceURL, atomically: true, encoding: .utf8)
         try usageText.write(to: usageURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
         await editor.openProject(rootURL)
         await editor.openFile(sourceURL)
         let sourceTabID = try XCTUnwrap(editor.selectedTabID)
@@ -2329,7 +2329,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "first\nsecond\nthird".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
@@ -2369,7 +2369,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "next".write(to: nextFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(firstRootURL)
         await editor.openFile(firstFileURL)
@@ -2399,7 +2399,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
         try "third".write(to: thirdFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2423,7 +2423,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2451,7 +2451,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
         try "third".write(to: thirdFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2481,7 +2481,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState(isFileWatchingEnabled: false)
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
 
         await editor.openProject(rootURL)
         await editor.openFile(firstFileURL)
@@ -2505,7 +2505,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let firstFileURL = firstRootURL.appending(path: "First.txt")
         try "first original".write(to: firstFileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
 
         await editor.openProject(firstRootURL)
         await editor.openFile(firstFileURL)
@@ -2531,7 +2531,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
         let fileURL = rootURL.appending(path: "Note.txt")
         try "first\nsecond\nthird".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let editor = EditorState()
+        let editor = EditorViewModel()
         await editor.openProject(rootURL)
         await editor.openFile(fileURL)
         let tabID = try XCTUnwrap(editor.selectedTabID)
@@ -2557,72 +2557,64 @@ final class EditorStateWorkspaceTests: XCTestCase {
     }
 
     private func waitForSymbolIndexReady(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        for _ in 0..<50 {
+        try await TestSupport.waitUntil("symbol index readiness", file: file, line: line) {
             if case .ready = editor.symbolIndexStatus {
-                return
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for symbol index readiness.", file: file, line: line)
     }
 
     private func waitForReviewDiffLoaded(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws -> GitReviewDiffSnapshot {
-        for _ in 0..<50 {
+        var loadedSnapshot: GitReviewDiffSnapshot?
+        try await TestSupport.waitUntil("review diff", file: file, line: line) {
             if case .loaded(let snapshot) = editor.reviewDiffState {
-                return snapshot
+                loadedSnapshot = snapshot
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for review diff.", file: file, line: line)
-        throw GitReviewDiffError.gitCommandFailed("Timed out waiting for review diff.")
+        return try XCTUnwrap(loadedSnapshot, file: file, line: line)
     }
 
     private func waitForReviewDiffCallCount(
         _ expectedCount: Int,
-        in gitService: EditorStateWorkspaceMockGitService,
+        in gitService: EditorViewModelWorkspaceMockGitService,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) async throws -> [EditorStateWorkspaceMockGitService.ReviewDiffCall] {
-        for _ in 0..<50 {
+    ) async throws -> [EditorViewModelWorkspaceMockGitService.ReviewDiffCall] {
+        var matchedCalls: [EditorViewModelWorkspaceMockGitService.ReviewDiffCall] = []
+        try await TestSupport.waitUntil("review diff calls", file: file, line: line) {
             let calls = gitService.reviewDiffCalls()
             if calls.count >= expectedCount {
-                return calls
+                matchedCalls = calls
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for review diff calls.", file: file, line: line)
-        throw GitReviewDiffError.gitCommandFailed("Timed out waiting for review diff calls.")
+        return matchedCalls
     }
 
     private func waitForReviewBase(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         _ expectedBase: GitReviewDiffBase,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
-        for _ in 0..<50 {
-            if editor.reviewDiffBase == expectedBase {
-                return
-            }
-
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await TestSupport.waitUntil("review base", file: file, line: line) {
+            editor.reviewDiffBase == expectedBase
         }
-
-        XCTFail("Timed out waiting for review base.", file: file, line: line)
     }
 
     private func waitForStoredReviewBase(
@@ -2633,95 +2625,77 @@ final class EditorStateWorkspaceTests: XCTestCase {
         line: UInt = #line
     ) async throws {
         let store = WorktreeMetadataStore()
-        for _ in 0..<50 {
-            if await store.reviewBase(forBranch: branchName, metadataDirectoryURL: metadataDirectoryURL) == expectedBase {
-                return
-            }
-
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await TestSupport.waitUntil("stored review base", file: file, line: line) {
+            await store.reviewBase(forBranch: branchName, metadataDirectoryURL: metadataDirectoryURL) == expectedBase
         }
-
-        XCTFail("Timed out waiting for stored review base.", file: file, line: line)
     }
 
     private func waitForGitHubPullRequestStatus(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws -> GitHubPullRequestStatus {
-        for _ in 0..<50 {
+        var loadedStatus: GitHubPullRequestStatus?
+        try await TestSupport.waitUntil("GitHub pull request", file: file, line: line) {
             if let status = editor.githubPullRequestStatus {
-                return status
+                loadedStatus = status
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for GitHub pull request.", file: file, line: line)
-        throw GitReviewDiffError.gitCommandFailed("Timed out waiting for GitHub pull request.")
+        return try XCTUnwrap(loadedStatus, file: file, line: line)
     }
 
     private func waitForGitHubPullRequestStatus(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         workspaceID: ProjectWorkspaceSnapshot.ID,
         expectedStatus: GitHubPullRequestStatus,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
         let workspaceID = workspaceID.standardizedFileURL
-        for _ in 0..<50 {
-            if editor.githubPullRequestStatusesByProjectID[workspaceID] == expectedStatus {
-                return
-            }
-
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await TestSupport.waitUntil("workspace GitHub pull request", file: file, line: line) {
+            editor.githubPullRequestStatusesByProjectID[workspaceID] == expectedStatus
         }
-
-        XCTFail("Timed out waiting for workspace GitHub pull request.", file: file, line: line)
     }
 
     private func waitForGitHubPullRequestLoadingState(
-        _ editor: EditorState,
+        _ editor: EditorViewModel,
         workspaceID: ProjectWorkspaceSnapshot.ID,
         isLoading: Bool,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async throws {
         let workspaceID = workspaceID.standardizedFileURL
-        for _ in 0..<50 {
-            if editor.githubPullRequestLoadingProjectIDs.contains(workspaceID) == isLoading {
-                return
-            }
-
-            try await Task.sleep(nanoseconds: 20_000_000)
+        try await TestSupport.waitUntil("workspace GitHub pull request loading state", file: file, line: line) {
+            editor.githubPullRequestLoadingProjectIDs.contains(workspaceID) == isLoading
         }
-
-        XCTFail("Timed out waiting for workspace GitHub pull request loading state.", file: file, line: line)
     }
 
     private func waitForGitHubPullRequestCall(
-        _ service: EditorStateWorkspaceMockGitHubPullRequestService,
+        _ service: EditorViewModelWorkspaceMockGitHubPullRequestService,
         branchName: String,
         baseBranchName: String?,
         openedRootURL: URL,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) async throws -> EditorStateWorkspaceMockGitHubPullRequestService.Call {
-        let expectedCall = EditorStateWorkspaceMockGitHubPullRequestService.Call(
+    ) async throws -> EditorViewModelWorkspaceMockGitHubPullRequestService.Call {
+        let expectedCall = EditorViewModelWorkspaceMockGitHubPullRequestService.Call(
             branchName: branchName,
             baseBranchName: baseBranchName,
             openedRootURL: openedRootURL.standardizedFileURL
         )
-        for _ in 0..<50 {
+        var matchedCall: EditorViewModelWorkspaceMockGitHubPullRequestService.Call?
+        try await TestSupport.waitUntil("GitHub pull request lookup", file: file, line: line) {
             if let call = await service.calls().first(where: { $0 == expectedCall }) {
-                return call
+                matchedCall = call
+                return true
             }
 
-            try await Task.sleep(nanoseconds: 20_000_000)
+            return false
         }
-
-        XCTFail("Timed out waiting for GitHub pull request lookup.", file: file, line: line)
-        throw GitReviewDiffError.gitCommandFailed("Timed out waiting for GitHub pull request lookup.")
+        return try XCTUnwrap(matchedCall, file: file, line: line)
     }
 
     private func makeGitSnapshot(
@@ -2760,7 +2734,7 @@ final class EditorStateWorkspaceTests: XCTestCase {
     }
 }
 
-private actor EditorStateWorkspaceMockGitHubPullRequestService: GitHubPullRequestServiceProtocol {
+private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRequestServiceProtocol {
     struct Call: Equatable {
         let branchName: String
         let baseBranchName: String?
@@ -2820,7 +2794,7 @@ private actor EditorStateWorkspaceMockGitHubPullRequestService: GitHubPullReques
     }
 }
 
-nonisolated private final class EditorStateWorkspaceMockGitService: GitServiceProtocol, @unchecked Sendable {
+nonisolated private final class EditorViewModelWorkspaceMockGitService: GitServiceProtocol, @unchecked Sendable {
     struct ReviewDiffCall: Equatable {
         let base: GitReviewDiffBase
         let options: GitReviewDiffOptions
@@ -3023,7 +2997,7 @@ nonisolated private final class RecordingWorktreeInitializationService: Worktree
     }
 }
 
-nonisolated private final class RecordingEditorStateWorkspaceGitService: GitServiceProtocol, @unchecked Sendable {
+nonisolated private final class RecordingEditorViewModelWorkspaceGitService: GitServiceProtocol, @unchecked Sendable {
     private let snapshots: [URL: GitRepositorySnapshot]
     private let lock = NSLock()
     private var requestedRepositoryStatusURLs: [URL] = []

@@ -14,6 +14,7 @@ protocol TerminalRuntimeDelegate: AnyObject {
     func terminalRuntimeDidRequestCloseTab(_ runtime: TerminalRuntime)
     func terminalRuntime(_ runtime: TerminalRuntime, didRequestSelectTabAtShortcutNumber number: Int)
     func terminalRuntime(_ runtime: TerminalRuntime, didRequestOpenFile request: TerminalFileOpenRequest)
+    func terminalRuntimeDidReceiveUserInteraction(_ runtime: TerminalRuntime)
 }
 
 @MainActor
@@ -32,7 +33,7 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
     private let agentStatusHookURL: URL?
     private let launchConfiguration: TerminalShellLaunchConfiguration
     private var isInvalidated = false
-    private var keyDownMonitor: Any?
+    private var userInteractionMonitor: Any?
     private var terminalViewDelegateProxy: RuriTerminalViewDelegateProxy?
 
     init(
@@ -64,7 +65,7 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
         }
         self.terminalViewDelegateProxy = terminalViewDelegateProxy
         terminalView.terminalDelegate = terminalViewDelegateProxy
-        installKeyDownMonitor()
+        installUserInteractionMonitor()
         terminalView.startProcess(
             executable: launchConfiguration.executable,
             args: launchArguments.isEmpty ? launchConfiguration.arguments : launchArguments,
@@ -87,9 +88,9 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
         guard !isInvalidated else { return }
         isInvalidated = true
 
-        if let keyDownMonitor {
-            NSEvent.removeMonitor(keyDownMonitor)
-            self.keyDownMonitor = nil
+        if let userInteractionMonitor {
+            NSEvent.removeMonitor(userInteractionMonitor)
+            self.userInteractionMonitor = nil
         }
         terminalView.processDelegate = nil
         terminalView.terminalDelegate = nil
@@ -160,12 +161,24 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
         )
     }
 
-    private func installKeyDownMonitor() {
-        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  self.shouldHandleTerminalShortcut(event) else {
+    private func installUserInteractionMonitor() {
+        userInteractionMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown]
+        ) { [weak self] event in
+            guard let self else { return event }
+
+            if event.type == .leftMouseDown {
+                if self.isMouseEventInsideTerminalView(event) {
+                    self.delegate?.terminalRuntimeDidReceiveUserInteraction(self)
+                }
                 return event
             }
+
+            guard self.isTerminalFocusedKeyEvent(event) else {
+                return event
+            }
+
+            self.delegate?.terminalRuntimeDidReceiveUserInteraction(self)
 
             switch TerminalKeyCommandMatcher.terminalShortcut(for: event) {
             case .newTab:
@@ -181,13 +194,10 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    private func shouldHandleTerminalShortcut(_ event: NSEvent) -> Bool {
-        guard TerminalKeyCommandMatcher.terminalShortcut(for: event) != nil,
-              event.window === terminalView.window else {
-            return false
-        }
-
-        guard let firstResponder = event.window?.firstResponder else {
+    private func isTerminalFocusedKeyEvent(_ event: NSEvent) -> Bool {
+        guard event.window != nil,
+              event.window === terminalView.window,
+              let firstResponder = event.window?.firstResponder else {
             return false
         }
 
@@ -200,6 +210,16 @@ final class TerminalRuntime: NSObject, LocalProcessTerminalViewDelegate {
         }
 
         return firstResponderView.isDescendant(of: terminalView)
+    }
+
+    private func isMouseEventInsideTerminalView(_ event: NSEvent) -> Bool {
+        guard event.window != nil,
+              event.window === terminalView.window else {
+            return false
+        }
+
+        let location = terminalView.convert(event.locationInWindow, from: nil)
+        return terminalView.bounds.contains(location)
     }
 }
 

@@ -15,6 +15,9 @@ struct ProjectSidebarView: View {
     let isFileTreeShowingChangedFilesOnly: Bool
     let canShowChangedFilesOnlyInFileTree: Bool
     let canFocusSelectedFileInTree: Bool
+    let visibleFocusedPane: FocusedPane?
+    let engageFileTreeFocus: () -> Void
+    let setFileTreeInlineEditing: (Bool) -> Void
     let selectFileTreeNode: (URL) -> Void
     let toggleFileTreeChangedFilesOnly: () -> Void
     let focusSelectedFileInTree: () -> Void
@@ -29,6 +32,7 @@ struct ProjectSidebarView: View {
     let createFileTreeNode: (URL, String, Bool) -> Void
     let duplicateFileTreeNode: (URL) -> Void
     let requestDeleteFileTreeNode: (FileNode) -> Void
+    let notifyCopied: (String) -> Void
 
     private var activeProject: ProjectWorkspaceSnapshot? {
         guard let activeProjectID else { return nil }
@@ -58,8 +62,20 @@ struct ProjectSidebarView: View {
                     expandDirectory: expandFileTreeDirectory,
                     createNode: createFileTreeNode,
                     duplicateNode: duplicateFileTreeNode,
-                    requestDelete: requestDeleteFileTreeNode
+                    requestDelete: requestDeleteFileTreeNode,
+                    notifyCopied: notifyCopied,
+                    engageTreeFocus: engageFileTreeFocus,
+                    setTreeInlineEditing: setFileTreeInlineEditing
                 )
+                .overlay(alignment: .top) {
+                    if visibleFocusedPane == .fileTree {
+                        Rectangle()
+                            .fill(Color.accentColor)
+                            .frame(height: EditorMetrics.focusLineHeight)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: visibleFocusedPane == .fileTree)
             } else {
                 ContentUnavailableView(
                     AppText.noFolderOpenedTitle,
@@ -167,6 +183,9 @@ struct ProjectSidebarView: View {
         isFileTreeShowingChangedFilesOnly: false,
         canShowChangedFilesOnlyInFileTree: false,
         canFocusSelectedFileInTree: true,
+        visibleFocusedPane: nil,
+        engageFileTreeFocus: {},
+        setFileTreeInlineEditing: { _ in },
         selectFileTreeNode: { _ in },
         toggleFileTreeChangedFilesOnly: {},
         focusSelectedFileInTree: {},
@@ -180,6 +199,7 @@ struct ProjectSidebarView: View {
         expandFileTreeDirectory: { _ in },
         createFileTreeNode: { _, _, _ in },
         duplicateFileTreeNode: { _ in },
-        requestDeleteFileTreeNode: { _ in }
+        requestDeleteFileTreeNode: { _ in },
+        notifyCopied: { _ in }
     )
 }

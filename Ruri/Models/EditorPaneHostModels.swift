@@ -15,6 +15,8 @@ struct EditorPaneHostState {
     let isLoadingReviewDiffRemoteBranches: Bool
     let reviewDiffRemoteBranchErrorMessage: String?
     let reviewDiffHideWhitespace: Bool
+    let reviewDiffViewedFilePaths: Set<String>
+    let reviewDiffViewedSyncsToPullRequest: Bool
     let tabs: [EditorTabSnapshot]
     let selectedTabID: EditorTab.ID?
     let findPresentationRequest: EditorFindPresentationRequest?
@@ -25,8 +27,10 @@ struct EditorPaneHostState {
     let gitSnapshot: GitRepositorySnapshot?
     let githubAuthStatus: GitHubAuthStatusState
     let githubPullRequestStatus: GitHubPullRequestStatus?
+    let isGithubPullRequestLoading: Bool
     let tabInputSetting: EditorTabInputSetting
     let lineWrappingMode: EditorLineWrappingMode
+    let visibleFocusedPane: FocusedPane?
 }
 
 struct EditorPaneHostActions {
@@ -50,6 +54,7 @@ struct EditorPaneHostActions {
     let loadReviewDiffRemoteBranches: (Bool) -> Void
     let refreshReviewDiff: () -> Void
     let setReviewDiffHideWhitespace: (Bool) -> Void
+    let setReviewDiffFileViewed: (String, Bool) -> Void
     let openReviewDiffFile: (URL) -> Void
     let closeTab: (EditorTab.ID) -> Void
     let moveTab: (EditorTab.ID, EditorTab.ID) -> Void
@@ -184,14 +189,14 @@ struct GitHubStatusBarState: Equatable {
     init(status: GitHubAuthStatusState) {
         switch status {
         case .checking:
-            title = "GitHub"
+            title = "Checking..."
             toolTip = "Checking GitHub authentication."
             accessibilityValue = "Checking GitHub authentication"
             action = nil
             tint = .secondary
 
         case .authenticating:
-            title = "GitHub"
+            title = "Logging in..."
             toolTip = "Starting GitHub login."
             accessibilityValue = "Starting GitHub login"
             action = nil
@@ -232,23 +237,41 @@ struct GitHubPullRequestStatusBarState: Equatable {
     let title: String
     let toolTip: String
     let accessibilityValue: String
-    let url: URL
+    let url: URL?
+    let tint: GitHubStatusBarTint
 
-    init?(status: GitHubPullRequestStatus?) {
+    init?(status: GitHubPullRequestStatus?, isLoading: Bool) {
+        if isLoading {
+            title = "Loading PR..."
+            toolTip = "Loading pull request status."
+            accessibilityValue = "Loading pull request status"
+            url = nil
+            tint = .tertiary
+            return
+        }
+
         guard let status else { return nil }
 
         switch status {
         case .pullRequest(let pullRequest):
-            title = pullRequest.isDraft ? "\(pullRequest.displayTitle) Draft" : pullRequest.displayTitle
-            toolTip = "View pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)\n\(pullRequest.url.absoluteString)"
+            var title = pullRequest.isDraft ? "\(pullRequest.displayTitle) Draft" : pullRequest.displayTitle
+            var toolTip = "View pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)\n\(pullRequest.url.absoluteString)"
+            if pullRequest.showsConflicts {
+                title += " Conflicts"
+                toolTip = "View pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)\nMerge conflicts with the base branch.\n\(pullRequest.url.absoluteString)"
+            }
+            self.title = title
+            self.toolTip = toolTip
             accessibilityValue = "Pull request \(pullRequest.displayTitle), \(pullRequest.displayStateDescription)"
             url = pullRequest.url
+            tint = pullRequest.showsConflicts ? .red : .secondary
 
         case .create(let creationLink):
             title = "Create PR"
             toolTip = "Create pull request \(creationLink.headBranch) into \(creationLink.baseBranch)\n\(creationLink.url.absoluteString)"
             accessibilityValue = "Create pull request"
             url = creationLink.url
+            tint = .secondary
         }
     }
 }

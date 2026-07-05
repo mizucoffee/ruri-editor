@@ -18,6 +18,7 @@ struct ContentView: View {
     @ObservedObject var tabInputSettings: EditorTabInputSettingsStore
     @ObservedObject var lineWrappingSettings: EditorLineWrappingSettingsStore
     @ObservedObject var githubAuth: GitHubAuthViewModel
+    @ObservedObject var paneFocus: PaneFocusStore
     @Binding var isImporterPresented: Bool
     @Binding var isWorktreeOverviewVisible: Bool
     let openProjectInNewWindow: (URL) -> Void
@@ -53,6 +54,9 @@ struct ContentView: View {
             isFileTreeShowingChangedFilesOnly: editor.isFileTreeShowingChangedFilesOnly,
             canShowChangedFilesOnlyInFileTree: editor.canShowChangedFilesOnlyInFileTree,
             canFocusSelectedFileInTree: editor.canFocusSelectedFileInTree,
+            visibleFocusedPane: paneFocus.visiblePane,
+            engageFileTreeFocus: { paneFocus.engageFileTree() },
+            setFileTreeInlineEditing: { paneFocus.setFileTreeInlineEditing($0) },
             selectFileTreeNode: { editor.selectFileTreeNode($0) },
             toggleFileTreeChangedFilesOnly: {
                 editor.toggleFileTreeChangedFilesOnly()
@@ -132,6 +136,9 @@ struct ContentView: View {
             },
             requestDeleteFileTreeNode: { node in
                 fileTreeDeletionTarget = node
+            },
+            notifyCopied: { message in
+                showCodeNavigationToast(message, systemImage: "doc.on.doc")
             }
         )
     }
@@ -141,6 +148,7 @@ struct ContentView: View {
                 EditorPaneView(
                     runtimeStore: editorRuntimeStore,
                     terminalState: terminalState,
+                    paneFocus: paneFocus,
                     state: EditorPaneHostState(
                         workspaceID: editor.activeProjectID,
                         editorMode: editor.editorMode,
@@ -150,6 +158,8 @@ struct ContentView: View {
                         isLoadingReviewDiffRemoteBranches: editor.isLoadingReviewDiffRemoteBranches,
                         reviewDiffRemoteBranchErrorMessage: editor.reviewDiffRemoteBranchErrorMessage,
                         reviewDiffHideWhitespace: editor.reviewDiffHideWhitespace,
+                        reviewDiffViewedFilePaths: editor.reviewDiffViewedFilePaths,
+                        reviewDiffViewedSyncsToPullRequest: editor.reviewDiffViewedSyncsToPullRequest,
                         tabs: editor.mainTabs,
                         selectedTabID: editor.selectedTabID,
                         findPresentationRequest: editorRuntimeStore.findPresentationRequest,
@@ -160,8 +170,12 @@ struct ContentView: View {
                         gitSnapshot: editor.gitSnapshot,
                         githubAuthStatus: githubAuth.status,
                         githubPullRequestStatus: editor.githubPullRequestStatus,
+                        isGithubPullRequestLoading: editor.activeProjectID.map {
+                            editor.githubPullRequestLoadingProjectIDs.contains($0)
+                        } ?? false,
                         tabInputSetting: tabInputSettings.setting,
-                        lineWrappingMode: lineWrappingSettings.mode
+                        lineWrappingMode: lineWrappingSettings.mode,
+                        visibleFocusedPane: paneFocus.visiblePane
                     ),
                     actions: EditorPaneHostActions(
                         editorSession: { editor.editorSession(for: $0) },
@@ -208,6 +222,9 @@ struct ContentView: View {
                         setReviewDiffHideWhitespace: { hideWhitespace in
                             editor.setReviewDiffHideWhitespace(hideWhitespace)
                         },
+                        setReviewDiffFileViewed: { path, isViewed in
+                            editor.setReviewDiffFileViewed(isViewed, path: path)
+                        },
                         openReviewDiffFile: { url in
                             openFile(url, activationFocusBehavior: .focusTextView)
                         },
@@ -231,6 +248,7 @@ struct ContentView: View {
                     memos: editor.worktreeMemosByProjectID,
                     pullRequestStatuses: editor.githubPullRequestStatusesByProjectID,
                     pullRequestLoadingWorkspaceIDs: editor.githubPullRequestLoadingProjectIDs,
+                    pullingWorkspaceIDs: editor.pullingWorkspaceIDs,
                     activeWorkspaceID: editor.activeProjectID,
                     selectedTerminalTabID: terminalState.selectedTabID,
                     deletableWorkspaceIDs: Set(editor.projectWorkspaces.compactMap { workspace in
@@ -258,6 +276,9 @@ struct ContentView: View {
                     },
                     openPullRequest: { url in
                         NSWorkspace.shared.open(url)
+                    },
+                    notifyCopied: { message in
+                        showCodeNavigationToast(message, systemImage: "doc.on.doc")
                     }
                 )
                 .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
@@ -445,6 +466,12 @@ struct ContentView: View {
         ) {
             Button(AppText.createButton) {
                 let request = editor.externalPullRequestWorktreeCreationRequest
+                if let request {
+                    showCodeNavigationToast(
+                        "Creating worktree for PR #\(request.pullRequestNumber)...",
+                        systemImage: "arrow.triangle.branch"
+                    )
+                }
                 Task {
                     await editor.confirmExternalPullRequestWorktreeCreation(request)
                 }
@@ -690,8 +717,9 @@ struct ContentView: View {
     private func pullWorktree(_ workspaceID: ProjectWorkspaceSnapshot.ID) {
         Task {
             do {
-                try await editor.pullWorktree(workspaceID)
-                showCodeNavigationToast("Pull completed.", systemImage: "checkmark.circle")
+                if try await editor.pullWorktree(workspaceID) {
+                    showCodeNavigationToast("Pull completed.", systemImage: "checkmark.circle")
+                }
             } catch {
                 editor.presentError(error)
             }
@@ -940,6 +968,7 @@ private struct FileTreeDeletionAlertModifier: ViewModifier {
             service: PreviewGitHubAuthService(),
             initialStatus: .unauthenticated
         ),
+        paneFocus: PaneFocusStore(),
         isImporterPresented: .constant(false),
         isWorktreeOverviewVisible: .constant(true),
         openProjectInNewWindow: { _ in }

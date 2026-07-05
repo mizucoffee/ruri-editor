@@ -20,11 +20,21 @@ nonisolated protocol WorktreeMetadataStoring: Sendable {
         metadataDirectoryURL: URL,
         repositoryRootURL: URL?
     ) async throws
+    func viewedReviewFiles(forBranch branchName: String, metadataDirectoryURL: URL) async -> [String: String]
+    func saveViewedReviewFile(
+        path: String,
+        fingerprint: String?,
+        forBranch branchName: String,
+        metadataDirectoryURL: URL,
+        repositoryRootURL: URL?
+    ) async throws
 }
 
 nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
     private static let fileName = "worktree-metadata.json"
     private static let ruriExcludeLine = ".ruri/"
+    // 同一JSONへのread-modify-writeを直列化し、save同士のlost updateを防ぐ。
+    private static let writeSerializer = WorktreeMetadataWriteSerializer()
 
     nonisolated init() {}
 
@@ -54,7 +64,7 @@ nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
         metadataDirectoryURL: URL,
         repositoryRootURL: URL?
     ) async throws {
-        try await Task.detached(priority: .utility) {
+        try await Self.writeSerializer.run {
             let metadataDirectoryURL = metadataDirectoryURL.standardizedFileURL
             let fileURL = metadataDirectoryURL.appending(path: Self.fileName)
             let fileManager = FileManager.default
@@ -76,7 +86,7 @@ nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
                FileURLRewriter.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
                 try Self.ensureRuriDirectoryIsLocallyExcluded(in: repositoryRootURL)
             }
-        }.value
+        }
     }
 
     nonisolated func saveReviewBase(
@@ -85,7 +95,7 @@ nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
         metadataDirectoryURL: URL,
         repositoryRootURL: URL?
     ) async throws {
-        try await Task.detached(priority: .utility) {
+        try await Self.writeSerializer.run {
             let metadataDirectoryURL = metadataDirectoryURL.standardizedFileURL
             let fileURL = metadataDirectoryURL.appending(path: Self.fileName)
             let fileManager = FileManager.default
@@ -107,7 +117,54 @@ nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
                FileURLRewriter.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
                 try Self.ensureRuriDirectoryIsLocallyExcluded(in: repositoryRootURL)
             }
+        }
+    }
+
+    nonisolated func viewedReviewFiles(
+        forBranch branchName: String,
+        metadataDirectoryURL: URL
+    ) async -> [String: String] {
+        await Task.detached(priority: .utility) {
+            let fileURL = metadataDirectoryURL
+                .standardizedFileURL
+                .appending(path: Self.fileName)
+            let document = Self.loadDocument(from: fileURL)
+            return document.branches[branchName]?.viewedReviewFiles ?? [:]
         }.value
+    }
+
+    nonisolated func saveViewedReviewFile(
+        path: String,
+        fingerprint: String?,
+        forBranch branchName: String,
+        metadataDirectoryURL: URL,
+        repositoryRootURL: URL?
+    ) async throws {
+        try await Self.writeSerializer.run {
+            let metadataDirectoryURL = metadataDirectoryURL.standardizedFileURL
+            let fileURL = metadataDirectoryURL.appending(path: Self.fileName)
+            let fileManager = FileManager.default
+
+            try fileManager.createDirectory(
+                at: metadataDirectoryURL,
+                withIntermediateDirectories: true
+            )
+
+            var document = Self.loadDocument(from: fileURL)
+            document.version = 1
+            var branch = document.branches[branchName] ?? WorktreeMetadataBranch()
+            var viewedReviewFiles = branch.viewedReviewFiles ?? [:]
+            viewedReviewFiles[path] = fingerprint
+            branch.viewedReviewFiles = viewedReviewFiles.isEmpty ? nil : viewedReviewFiles
+            document.branches[branchName] = branch
+
+            try Self.saveDocument(document, to: fileURL)
+
+            if let repositoryRootURL,
+               FileURLRewriter.isDescendantOrSame(metadataDirectoryURL, of: repositoryRootURL) {
+                try Self.ensureRuriDirectoryIsLocallyExcluded(in: repositoryRootURL)
+            }
+        }
     }
 
     private nonisolated static func loadDocument(from fileURL: URL) -> WorktreeMetadataDocument {
@@ -154,6 +211,12 @@ nonisolated struct WorktreeMetadataStore: WorktreeMetadataStoring, Sendable {
 
 }
 
+private actor WorktreeMetadataWriteSerializer {
+    func run<T: Sendable>(_ body: @Sendable () throws -> T) async rethrows -> T {
+        try body()
+    }
+}
+
 private struct WorktreeMetadataDocument: Codable {
     var version: Int
     var branches: [String: WorktreeMetadataBranch]
@@ -162,6 +225,7 @@ private struct WorktreeMetadataDocument: Codable {
 private struct WorktreeMetadataBranch: Codable {
     var memo: String = ""
     var reviewBase: WorktreeMetadataReviewBase?
+    var viewedReviewFiles: [String: String]?
 }
 
 private struct WorktreeMetadataReviewBase: Codable {

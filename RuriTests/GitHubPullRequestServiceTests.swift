@@ -35,7 +35,7 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         )
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"]
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"]
         ])
         XCTAssertEqual(calls.first?.currentDirectoryURL, rootURL.standardizedFileURL)
     }
@@ -82,7 +82,7 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         )
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"]
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"]
         ])
     }
 
@@ -111,7 +111,7 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         )
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"]
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"]
         ])
     }
 
@@ -140,8 +140,63 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         )
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"]
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"]
         ])
+    }
+
+    func testPullRequestDecodesMergeableState() async {
+        let cases: [(json: String, expected: GitHubPullRequestMergeableState)] = [
+            ("\"MERGEABLE\"", .mergeable),
+            ("\"CONFLICTING\"", .conflicting),
+            ("\"UNKNOWN\"", .unknown)
+        ]
+
+        for (json, expected) in cases {
+            let runner = RecordingGitHubCommandRunner(results: [
+                .success(GitHubCommandResult(stdout: data("""
+                {"number":123,"url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergeable":\(json)}
+                """), exitCode: 0))
+            ])
+            let service = GitHubPullRequestService(executableURL: ghURL, commandRunner: runner)
+
+            let status = await service.pullRequestStatus(
+                forBranch: "feature/status-pr",
+                baseBranch: "main",
+                openedRootURL: URL(filePath: "/tmp/ruri-pr-service", directoryHint: .isDirectory)
+            )
+
+            XCTAssertEqual(
+                status,
+                .pullRequest(GitHubPullRequestInfo(
+                    number: 123,
+                    url: URL(string: "https://github.com/owner/repo/pull/123")!,
+                    lifecycleState: .open,
+                    mergeableState: expected
+                )),
+                "mergeable=\(json)"
+            )
+        }
+    }
+
+    func testPullRequestDefaultsToUnknownMergeableStateWhenFieldIsMissing() async {
+        let runner = RecordingGitHubCommandRunner(results: [
+            .success(GitHubCommandResult(stdout: data("""
+            {"number":123,"url":"https://github.com/owner/repo/pull/123","state":"OPEN"}
+            """), exitCode: 0))
+        ])
+        let service = GitHubPullRequestService(executableURL: ghURL, commandRunner: runner)
+
+        let status = await service.pullRequestStatus(
+            forBranch: "feature/status-pr",
+            baseBranch: "main",
+            openedRootURL: URL(filePath: "/tmp/ruri-pr-service", directoryHint: .isDirectory)
+        )
+
+        guard case .pullRequest(let pullRequest)? = status else {
+            XCTFail("Expected pull request status, got \(String(describing: status))")
+            return
+        }
+        XCTAssertEqual(pullRequest.mergeableState, .unknown)
     }
 
     func testPullRequestReturnsCreationLinkWhenNoPullRequestExists() async {
@@ -170,7 +225,7 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         )
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"],
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"],
             ["repo", "view", "--json", "url"]
         ])
         XCTAssertEqual(calls.map(\.currentDirectoryURL), [
@@ -194,7 +249,7 @@ final class GitHubPullRequestServiceTests: XCTestCase {
         XCTAssertNil(status)
         let calls = await runner.calls()
         XCTAssertEqual(calls.map(\.arguments), [
-            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft"]
+            ["pr", "view", "feature/status-pr", "--json", "number,url,state,isDraft,mergeable"]
         ])
     }
 

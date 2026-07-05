@@ -416,6 +416,11 @@ final class TerminalViewModel: ObservableObject, TerminalRuntimeDelegate {
         openFileRequest(request)
     }
 
+    func terminalRuntimeDidReceiveUserInteraction(_ runtime: TerminalRuntime) {
+        guard runtime.workspaceID == activeWorkspaceID else { return }
+        markTerminalSeenByUserInteraction(runtime.tabID)
+    }
+
     private func ensureRuntime(
         for tab: TerminalTabSnapshot,
         workspaceID: ProjectWorkspaceSnapshot.ID
@@ -597,9 +602,28 @@ final class TerminalViewModel: ObservableObject, TerminalRuntimeDelegate {
         }
     }
 
+    // 表示中の選択ターミナルへのキー入力・クリックは「見た」操作なので、
+    // refreshでは残す配信済み通知をここで取り下げる(すでに表示中のまま通知が出た場合の消し口)。
+    func markTerminalSeenByUserInteraction(_ tabID: TerminalTab.ID) {
+        guard !isMinimized,
+              let activeWorkspaceID,
+              workspaces[activeWorkspaceID]?.selectedTabID == tabID else {
+            return
+        }
+
+        let hadUnreadStatus = unreadAgentStatusKeysByTabID.removeValue(forKey: tabID) != nil
+        if isApplicationActive() {
+            removeDeliveredAgentNotifications(for: [tabID])
+        }
+
+        guard hadUnreadStatus else { return }
+        publishActiveWorkspace()
+        publishWorkspaceSnapshots()
+    }
+
     // status refreshはユーザー操作ではないため、refresh経由では未読ドットだけ消して配信済み通知を残す。
-    // 表示中のターミナルへ出した直後の通知を後続refreshが取り下げるのを防ぐためで、
-    // 配信済み通知の削除はタブ選択・最小化解除・アプリのアクティブ化などの操作時に行う。
+    // 表示中のターミナルへ出した直後の通知を後続refreshが取り下げるのを防ぐためで、配信済み通知の削除は
+    // タブ選択・最小化解除・アプリのアクティブ化・表示中ターミナルへの入力などの操作時に行う。
     private func markVisibleSelectedTerminalSeen(removingDeliveredNotifications: Bool = true) {
         guard !isMinimized,
               let activeWorkspaceID,

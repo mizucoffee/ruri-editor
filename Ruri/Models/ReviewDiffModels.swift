@@ -103,39 +103,79 @@ struct ReviewDiffRenderedDocument: Equatable {
         lines.count
     }
 
+    /// 実ドキュメントを構築せずに描画行数だけを返す(オフスクリーン行の
+    /// プレースホルダ高の算出用)。行高は固定のため行数×行高が正確な高さになる。
+    /// `unified(file:oldFileURL:newFileURL:)` の行生成(hunkヘッダ1行 + 各行)と
+    /// 厳密に一致させること。
+    static func unifiedLineCount(for file: GitReviewFileDiff) -> Int {
+        file.diff.hunks.reduce(0) { $0 + 1 + $1.lines.count }
+    }
+
+    /// `sideBySide(file:side:fileURL:)` と厳密に一致する行数。ペア化により
+    /// old/new 両ペインの行数は常に等しい。
+    static func sideBySideLineCount(for file: GitReviewFileDiff) -> Int {
+        file.diff.hunks.reduce(0) { count, hunk in
+            count + 1 + ReviewDiffSideBySideRenderedRow.rows(hunkIndex: 0, lines: hunk.lines).count
+        }
+    }
+
     static func unified(
         file: GitReviewFileDiff,
         oldFileURL: URL?,
         newFileURL: URL?
     ) -> ReviewDiffRenderedDocument {
-        var builder = ReviewDiffRenderedDocumentBuilder(pane: .unified)
+        unifiedDocuments(
+            for: file,
+            oldFileURL: oldFileURL,
+            newFileURL: newFileURL,
+            maxLinesPerDocument: Int.max
+        )[0]
+    }
+
+    /// 長いファイルを maxLinesPerDocument 行ごとの複数ドキュメントに分割して返す。
+    /// レイヤーバックの巨大ビューはRetinaで約8,000pt(テクスチャ上限16384px)を
+    /// 超えた部分の描画が破棄されるため、ペインは分割して積み上げる必要がある。
+    /// 分割は「N行追加するごと」の機械的な境界で、side-by-side の old/new とも
+    /// 追加順序が同一のため境界は必ず一致する。
+    static func unifiedDocuments(
+        for file: GitReviewFileDiff,
+        oldFileURL: URL?,
+        newFileURL: URL?,
+        maxLinesPerDocument: Int
+    ) -> [ReviewDiffRenderedDocument] {
+        var chunker = ReviewDiffRenderedDocumentChunker(
+            pane: .unified,
+            maxLinesPerDocument: maxLinesPerDocument
+        )
 
         for (hunkIndex, hunk) in file.diff.hunks.enumerated() {
-            builder.appendHunkHeader(hunk)
+            chunker.withBuilder { $0.appendHunkHeader(hunk) }
 
             for (lineIndex, line) in hunk.lines.enumerated() {
                 let syntaxSide = line.unifiedSyntaxSide
                 let fallbackSyntaxSide: ReviewDiffSyntaxSide? = syntaxSide == .new ? .old : .new
                 let fileURL = line.kind == .deletion ? oldFileURL : newFileURL
                 let lineNumber = line.kind == .deletion ? line.oldLineNumber : line.newLineNumber
-                builder.appendCodeLine(
-                    content: line.content,
-                    kind: ReviewDiffRenderedLine.Kind(line.kind),
-                    oldLineNumber: line.oldLineNumber,
-                    newLineNumber: line.newLineNumber,
-                    marker: line.unifiedMarker,
-                    sourceFileURL: fileURL,
-                    navigationSide: line.kind == .deletion ? .old : .new,
-                    sourceLineNumber: lineNumber,
-                    syntaxKey: ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: syntaxSide),
-                    fallbackSyntaxKey: fallbackSyntaxSide.map {
-                        ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: $0)
-                    }
-                )
+                chunker.withBuilder {
+                    $0.appendCodeLine(
+                        content: line.content,
+                        kind: ReviewDiffRenderedLine.Kind(line.kind),
+                        oldLineNumber: line.oldLineNumber,
+                        newLineNumber: line.newLineNumber,
+                        marker: line.unifiedMarker,
+                        sourceFileURL: fileURL,
+                        navigationSide: line.kind == .deletion ? .old : .new,
+                        sourceLineNumber: lineNumber,
+                        syntaxKey: ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: syntaxSide),
+                        fallbackSyntaxKey: fallbackSyntaxSide.map {
+                            ReviewDiffLineKey(hunkIndex: hunkIndex, lineIndex: lineIndex, side: $0)
+                        }
+                    )
+                }
             }
         }
 
-        return builder.build()
+        return chunker.finish()
     }
 
     static func sideBySide(
@@ -143,40 +183,62 @@ struct ReviewDiffRenderedDocument: Equatable {
         side: ReviewDiffSyntaxSide,
         fileURL: URL?
     ) -> ReviewDiffRenderedDocument {
-        var builder = ReviewDiffRenderedDocumentBuilder(pane: side == .old ? .old : .new)
+        sideBySideDocuments(
+            for: file,
+            side: side,
+            fileURL: fileURL,
+            maxLinesPerDocument: Int.max
+        )[0]
+    }
+
+    /// `unifiedDocuments(for:...)` の side-by-side 版。old/new は行のペア化により
+    /// 追加順序・行数が完全に一致するため、同じ maxLinesPerDocument なら
+    /// 両サイドのチャンク境界と各チャンクの行数も一致する。
+    static func sideBySideDocuments(
+        for file: GitReviewFileDiff,
+        side: ReviewDiffSyntaxSide,
+        fileURL: URL?,
+        maxLinesPerDocument: Int
+    ) -> [ReviewDiffRenderedDocument] {
+        var chunker = ReviewDiffRenderedDocumentChunker(
+            pane: side == .old ? .old : .new,
+            maxLinesPerDocument: maxLinesPerDocument
+        )
 
         for (hunkIndex, hunk) in file.diff.hunks.enumerated() {
-            builder.appendHunkHeader(hunk)
+            chunker.withBuilder { $0.appendHunkHeader(hunk) }
 
             for row in ReviewDiffSideBySideRenderedRow.rows(hunkIndex: hunkIndex, lines: hunk.lines) {
                 let indexedLine = side == .old ? row.oldLine : row.newLine
                 guard let indexedLine else {
-                    builder.appendPlaceholder()
+                    chunker.withBuilder { $0.appendPlaceholder() }
                     continue
                 }
 
                 let line = indexedLine.line
                 let lineNumber = side == .old ? line.oldLineNumber : line.newLineNumber
-                builder.appendCodeLine(
-                    content: line.content,
-                    kind: ReviewDiffRenderedLine.Kind(line.kind),
-                    oldLineNumber: side == .old ? line.oldLineNumber : nil,
-                    newLineNumber: side == .new ? line.newLineNumber : nil,
-                    marker: line.marker(for: side),
-                    sourceFileURL: fileURL,
-                    navigationSide: side == .old ? .old : .new,
-                    sourceLineNumber: lineNumber,
-                    syntaxKey: ReviewDiffLineKey(
-                        hunkIndex: indexedLine.hunkIndex,
-                        lineIndex: indexedLine.lineIndex,
-                        side: side
-                    ),
-                    fallbackSyntaxKey: nil
-                )
+                chunker.withBuilder {
+                    $0.appendCodeLine(
+                        content: line.content,
+                        kind: ReviewDiffRenderedLine.Kind(line.kind),
+                        oldLineNumber: side == .old ? line.oldLineNumber : nil,
+                        newLineNumber: side == .new ? line.newLineNumber : nil,
+                        marker: line.marker(for: side),
+                        sourceFileURL: fileURL,
+                        navigationSide: side == .old ? .old : .new,
+                        sourceLineNumber: lineNumber,
+                        syntaxKey: ReviewDiffLineKey(
+                            hunkIndex: indexedLine.hunkIndex,
+                            lineIndex: indexedLine.lineIndex,
+                            side: side
+                        ),
+                        fallbackSyntaxKey: nil
+                    )
+                }
             }
         }
 
-        return builder.build()
+        return chunker.finish()
     }
 
     func line(containingUTF16Location location: Int) -> ReviewDiffRenderedLine? {
@@ -290,6 +352,38 @@ private extension ReviewDiffRenderedLine.Kind {
         case .deletion:
             self = .deletion
         }
+    }
+}
+
+/// maxLinesPerDocument 行を超えるたびにビルダーを切り替え、複数ドキュメントを生成する。
+private struct ReviewDiffRenderedDocumentChunker {
+    private let pane: ReviewDiffRenderedDocument.Pane
+    private let maxLinesPerDocument: Int
+    private var builder: ReviewDiffRenderedDocumentBuilder
+    private var documents: [ReviewDiffRenderedDocument] = []
+    private var lineCount = 0
+
+    init(pane: ReviewDiffRenderedDocument.Pane, maxLinesPerDocument: Int) {
+        self.pane = pane
+        self.maxLinesPerDocument = max(1, maxLinesPerDocument)
+        self.builder = ReviewDiffRenderedDocumentBuilder(pane: pane)
+    }
+
+    mutating func withBuilder(_ append: (inout ReviewDiffRenderedDocumentBuilder) -> Void) {
+        if lineCount == maxLinesPerDocument {
+            documents.append(builder.build())
+            builder = ReviewDiffRenderedDocumentBuilder(pane: pane)
+            lineCount = 0
+        }
+        append(&builder)
+        lineCount += 1
+    }
+
+    mutating func finish() -> [ReviewDiffRenderedDocument] {
+        if lineCount > 0 || documents.isEmpty {
+            documents.append(builder.build())
+        }
+        return documents
     }
 }
 
@@ -521,6 +615,31 @@ private extension SourceDiffLine {
 enum ReviewDiffScrollLayout {
     static let minimumMeasurableViewportWidth: CGFloat = 80
 
+    /// テキスト計測結果が依存する入力の署名。行高は固定のため、
+    /// この署名が一致する限り再計測(ensureLayout)は不要。
+    struct MeasurementSignature: Equatable {
+        let textWidth: CGFloat
+        let wrapLines: Bool
+    }
+
+    static func needsRemeasure(
+        previous: MeasurementSignature?,
+        candidate: MeasurementSignature,
+        forced: Bool
+    ) -> Bool {
+        forced || previous != candidate
+    }
+
+    /// 行がビューポートの前後1画面分以内にあるか。NSScrollViewを持つペインは
+    /// この範囲でのみ実体化し、範囲外は同一高さのプレースホルダに置き換える。
+    /// viewportBounds が取れない場合は安全側(実体化)に倒す。
+    static func isNearViewport(rowFrame: CGRect, viewportBounds: CGRect?) -> Bool {
+        guard let viewportBounds else { return true }
+        return rowFrame.intersects(
+            viewportBounds.insetBy(dx: 0, dy: -viewportBounds.height)
+        )
+    }
+
     enum ScrollWheelRoute {
         case pane
         case parent
@@ -602,6 +721,35 @@ enum ReviewDiffScrollLayout {
         max(lineHeight, CGFloat(max(1, lineCount)) * lineHeight + textInsetHeight * 2)
     }
 
+    /// チャンク分割して積み上げた場合の合計高。各チャンクが上下 inset を持つため、
+    /// 単一ドキュメントの推定高とはチャンク数に応じて差が出る。プレースホルダは
+    /// 必ずこちらを使い、実体化後の高さと厳密に一致させること。
+    static func estimatedChunkedDocumentHeight(
+        totalLineCount: Int,
+        maxLinesPerDocument: Int,
+        lineHeight: CGFloat,
+        textInsetHeight: CGFloat
+    ) -> CGFloat {
+        let clampedMax = max(1, maxLinesPerDocument)
+        let lineCount = max(1, totalLineCount)
+        let fullChunks = lineCount / clampedMax
+        let remainder = lineCount % clampedMax
+
+        var height = CGFloat(fullChunks) * estimatedDocumentHeight(
+            lineCount: clampedMax,
+            lineHeight: lineHeight,
+            textInsetHeight: textInsetHeight
+        )
+        if remainder > 0 {
+            height += estimatedDocumentHeight(
+                lineCount: remainder,
+                lineHeight: lineHeight,
+                textInsetHeight: textInsetHeight
+            )
+        }
+        return height
+    }
+
     static func normalizedHorizontalOrigin(
         currentOrigin: CGFloat,
         documentWidth: CGFloat,
@@ -612,5 +760,24 @@ enum ReviewDiffScrollLayout {
 
         let maximumOrigin = max(0, documentWidth - viewportWidth)
         return min(max(0, currentOrigin), maximumOrigin)
+    }
+}
+
+/// レビュー差分でファイルを最初から展開するかの方針。
+/// 展開ペインはNSScrollViewを保持するため、極端な差分では上限を設けないと
+/// ウィンドウ内のスクロールビュー蓄積でレイアウトが破綻する(GitHubの
+/// "Large diffs are not rendered by default" と同じ発想)。
+nonisolated enum ReviewDiffExpansionPolicy {
+    static let largeDiffLineThreshold = 1500
+    static let autoExpandFileLimit = 50
+
+    static func initiallyExpanded(
+        isViewed: Bool,
+        lineCount: Int,
+        fileIndex: Int
+    ) -> Bool {
+        !isViewed
+            && lineCount <= largeDiffLineThreshold
+            && fileIndex < autoExpandFileLimit
     }
 }

@@ -885,13 +885,17 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
 
             let parsedDiffs = GitDiffOutputParser.parse(diffText)
             let nameStatuses = GitDiffNameStatusOutputParser.parse(nameStatusText)
-            let files = Self.reviewFiles(
-                parsedDiffs: parsedDiffs,
-                nameStatuses: nameStatuses,
-                changedContentPaths: changedContentPaths,
-                untrackedChanges: parsedStatus.changes.filter(\.isUntracked),
+            let files = await applyingContentFingerprints(
+                to: Self.reviewFiles(
+                    parsedDiffs: parsedDiffs,
+                    nameStatuses: nameStatuses,
+                    changedContentPaths: changedContentPaths,
+                    untrackedChanges: parsedStatus.changes.filter(\.isUntracked),
+                    worktreeRootURL: metadata.worktreeRootURL,
+                    openedRootURL: openedRootURL
+                ),
                 worktreeRootURL: metadata.worktreeRootURL,
-                openedRootURL: openedRootURL
+                executableURL: executableURL
             )
 
             return GitReviewDiffSnapshot(
@@ -1041,13 +1045,17 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
 
             let parsedDiffs = GitDiffOutputParser.parse(diffText)
             let nameStatuses = GitDiffNameStatusOutputParser.parse(nameStatusText)
-            let files = Self.reviewFiles(
-                parsedDiffs: parsedDiffs,
-                nameStatuses: nameStatuses,
-                changedContentPaths: changedContentPaths,
-                untrackedChanges: parsedStatus.changes.filter(\.isUntracked),
+            let files = await applyingContentFingerprints(
+                to: Self.reviewFiles(
+                    parsedDiffs: parsedDiffs,
+                    nameStatuses: nameStatuses,
+                    changedContentPaths: changedContentPaths,
+                    untrackedChanges: parsedStatus.changes.filter(\.isUntracked),
+                    worktreeRootURL: metadata.worktreeRootURL,
+                    openedRootURL: openedRootURL
+                ),
                 worktreeRootURL: metadata.worktreeRootURL,
-                openedRootURL: openedRootURL
+                executableURL: executableURL
             )
 
             return GitReviewDiffUpdate(
@@ -1078,7 +1086,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
         var arguments = ["diff"]
         switch format {
         case .patch:
-            arguments.append("--unified=3")
+            arguments += ["--unified=3", "--full-index"]
         case .nameStatus:
             arguments += ["--name-status", "-z"]
         case .numstat:
@@ -1391,7 +1399,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
                 return [:]
             }
 
-            let diffs = GitDiffOutputParser.parse(diffText)
+            let diffs = GitDiffOutputParser.parse(diffText).map(\.diff)
             return Dictionary(uniqueKeysWithValues: diffs.compactMap { diff in
                 guard let url = Self.url(for: diff, worktreeRootURL: worktreeRootURL),
                       FileURLRewriter.isDescendantOrSame(url, of: openedRootURL) else {
@@ -1422,7 +1430,7 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
                 return nil
             }
 
-            return GitDiffOutputParser.parse(diffText).first { diff in
+            return GitDiffOutputParser.parse(diffText).map(\.diff).first { diff in
                 guard let url = Self.url(for: diff, worktreeRootURL: worktreeRootURL) else {
                     return false
                 }
@@ -1460,17 +1468,76 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
 
     // MARK: - Review File Assembly
 
+    /// Fills in missing content fingerprints (dirty working-tree, binary, and
+    /// untracked files have no usable blob SHA in the diff output) via batched
+    /// `git hash-object`. Best effort: failures leave the fingerprint nil and
+    /// never fail the snapshot.
+    private nonisolated func applyingContentFingerprints(
+        to files: [GitReviewFileDiff],
+        worktreeRootURL: URL,
+        executableURL: URL
+    ) async -> [GitReviewFileDiff] {
+        var updatedFiles = files.map { file in
+            if file.contentFingerprint == nil, file.newRelativePath == nil {
+                return file.withContentFingerprint(GitReviewFileDiff.deletedContentFingerprint)
+            }
+            return file
+        }
+
+        let pendingIndices = updatedFiles.indices.filter { index in
+            guard updatedFiles[index].contentFingerprint == nil,
+                  let relativePath = updatedFiles[index].newRelativePath else {
+                return false
+            }
+
+            let fileURL = worktreeRootURL.appending(path: relativePath).standardizedFileURL
+            return FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false))
+        }
+        guard !pendingIndices.isEmpty else { return updatedFiles }
+
+        let chunkSize = 500
+        var position = 0
+        while position < pendingIndices.count {
+            let chunk = Array(pendingIndices[position ..< min(position + chunkSize, pendingIndices.count)])
+            position += chunk.count
+
+            let relativePaths = chunk.compactMap { updatedFiles[$0].newRelativePath }
+            do {
+                let result = try await runGit(
+                    ["hash-object", "--"] + relativePaths,
+                    in: worktreeRootURL,
+                    executableURL: executableURL
+                )
+                guard result.exitCode == 0,
+                      let text = String(data: result.stdout, encoding: .utf8) else {
+                    continue
+                }
+
+                let hashes = text.split(separator: "\n").map(String.init)
+                guard hashes.count == chunk.count else { continue }
+
+                for (offset, index) in chunk.enumerated() {
+                    updatedFiles[index] = updatedFiles[index].withContentFingerprint(hashes[offset])
+                }
+            } catch {
+                continue
+            }
+        }
+
+        return updatedFiles
+    }
+
     private nonisolated static func reviewFiles(
-        parsedDiffs: [SourceFileDiff],
+        parsedDiffs: [GitParsedFileDiff],
         nameStatuses: [GitDiffNameStatusEntry],
         changedContentPaths: Set<String>?,
         untrackedChanges: [GitFileChange],
         worktreeRootURL: URL,
         openedRootURL: URL
     ) -> [GitReviewFileDiff] {
-        var diffByKey: [String: SourceFileDiff] = [:]
-        for diff in parsedDiffs {
-            diffByKey[reviewFileKey(oldPath: diff.oldRelativePath, newPath: diff.newRelativePath)] = diff
+        var diffByKey: [String: GitParsedFileDiff] = [:]
+        for parsed in parsedDiffs {
+            diffByKey[reviewFileKey(oldPath: parsed.diff.oldRelativePath, newPath: parsed.diff.newRelativePath)] = parsed
         }
 
         var files: [GitReviewFileDiff] = []
@@ -1484,7 +1551,8 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             }
 
             let key = reviewFileKey(oldPath: entry.oldRelativePath, newPath: entry.newRelativePath)
-            let diff = diffByKey[key] ?? SourceFileDiff(
+            let parsed = diffByKey[key]
+            let diff = parsed?.diff ?? SourceFileDiff(
                 oldRelativePath: entry.oldRelativePath,
                 newRelativePath: entry.newRelativePath,
                 hunks: []
@@ -1492,20 +1560,21 @@ nonisolated struct GitService: GitServiceProtocol, Sendable {
             files.append(GitReviewFileDiff(
                 diff: diff,
                 status: entry.status,
-                isBinary: diffByKey[key] == nil
+                isBinary: parsed == nil,
+                contentFingerprint: parsed?.newBlobSHA
             ))
             seenKeys.insert(key)
         }
 
-        for diff in parsedDiffs {
-            let key = reviewFileKey(oldPath: diff.oldRelativePath, newPath: diff.newRelativePath)
+        for parsed in parsedDiffs {
+            let key = reviewFileKey(oldPath: parsed.diff.oldRelativePath, newPath: parsed.diff.newRelativePath)
             guard !seenKeys.contains(key),
-                  let url = url(for: diff, worktreeRootURL: worktreeRootURL),
+                  let url = url(for: parsed.diff, worktreeRootURL: worktreeRootURL),
                   FileURLRewriter.isDescendantOrSame(url, of: openedRootURL) else {
                 continue
             }
 
-            files.append(GitReviewFileDiff(diff: diff))
+            files.append(GitReviewFileDiff(diff: parsed.diff, contentFingerprint: parsed.newBlobSHA))
             seenKeys.insert(key)
         }
 
@@ -2204,12 +2273,20 @@ nonisolated private enum GitDiffNumstatOutputParser {
     }
 }
 
+nonisolated struct GitParsedFileDiff: Equatable, Sendable {
+    let diff: SourceFileDiff
+    let oldBlobSHA: String?
+    let newBlobSHA: String?
+}
+
 nonisolated private enum GitDiffOutputParser {
-    static func parse(_ output: String) -> [SourceFileDiff] {
+    static func parse(_ output: String) -> [GitParsedFileDiff] {
         let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var diffs: [SourceFileDiff] = []
+        var diffs: [GitParsedFileDiff] = []
         var oldPath: String?
         var newPath: String?
+        var oldBlobSHA: String?
+        var newBlobSHA: String?
         var hunks: [SourceDiffHunk] = []
         var hunkBuilder: HunkBuilder?
 
@@ -2222,18 +2299,26 @@ nonisolated private enum GitDiffOutputParser {
 
         func finishDiff() {
             finishHunk()
+            defer {
+                oldPath = nil
+                newPath = nil
+                oldBlobSHA = nil
+                newBlobSHA = nil
+                hunks = []
+            }
             guard oldPath != nil || newPath != nil else { return }
 
             diffs.append(
-                SourceFileDiff(
-                    oldRelativePath: oldPath,
-                    newRelativePath: newPath,
-                    hunks: hunks
+                GitParsedFileDiff(
+                    diff: SourceFileDiff(
+                        oldRelativePath: oldPath,
+                        newRelativePath: newPath,
+                        hunks: hunks
+                    ),
+                    oldBlobSHA: oldBlobSHA,
+                    newBlobSHA: newBlobSHA
                 )
             )
-            oldPath = nil
-            newPath = nil
-            hunks = []
         }
 
         for line in lines {
@@ -2253,6 +2338,12 @@ nonisolated private enum GitDiffOutputParser {
                 continue
             }
 
+            if oldPath == nil, newPath == nil, let shas = parseIndexLine(line) {
+                oldBlobSHA = shas.old
+                newBlobSHA = shas.new
+                continue
+            }
+
             if let parsedOldPath = parseFileHeaderPath(line, marker: "--- ", prefix: "a/") {
                 oldPath = parsedOldPath
                 continue
@@ -2266,6 +2357,32 @@ nonisolated private enum GitDiffOutputParser {
 
         finishDiff()
         return diffs
+    }
+
+    private static func parseIndexLine(_ line: String) -> (old: String?, new: String?)? {
+        guard line.hasPrefix("index ") else { return nil }
+
+        let body = line.dropFirst("index ".count)
+        guard let token = body.split(separator: " ", omittingEmptySubsequences: true).first else {
+            return nil
+        }
+
+        let shas = token.split(separator: ".", omittingEmptySubsequences: true)
+        guard shas.count == 2 else { return nil }
+
+        return (old: normalizedBlobSHA(shas[0]), new: normalizedBlobSHA(shas[1]))
+    }
+
+    private static func normalizedBlobSHA(_ token: Substring) -> String? {
+        // Requires full-length SHAs (`--full-index`); all-zero means the blob
+        // is not stored (e.g. dirty working-tree content).
+        guard token.count >= 40,
+              token.allSatisfy(\.isHexDigit),
+              token.contains(where: { $0 != "0" }) else {
+            return nil
+        }
+
+        return String(token)
     }
 
     private static func parseFileHeaderPath(

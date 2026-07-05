@@ -59,6 +59,7 @@ final class WorktreeOverviewBuilderTests: XCTestCase {
                 secondRootURL.standardizedFileURL: .pullRequest(pullRequest)
             ],
             pullRequestLoadingWorkspaceIDs: [],
+            pullingWorkspaceIDs: [],
             activeWorkspaceID: secondRootURL.standardizedFileURL,
             selectedTerminalTabID: secondTab.id,
             deletableWorkspaceIDs: [secondRootURL.standardizedFileURL]
@@ -93,6 +94,7 @@ final class WorktreeOverviewBuilderTests: XCTestCase {
             memos: [:],
             pullRequestStatuses: [:],
             pullRequestLoadingWorkspaceIDs: [],
+            pullingWorkspaceIDs: [],
             activeWorkspaceID: rootURL.standardizedFileURL,
             selectedTerminalTabID: nil,
             deletableWorkspaceIDs: []
@@ -123,6 +125,7 @@ final class WorktreeOverviewBuilderTests: XCTestCase {
             memos: [:],
             pullRequestStatuses: [:],
             pullRequestLoadingWorkspaceIDs: [],
+            pullingWorkspaceIDs: [],
             activeWorkspaceID: betaURL.standardizedFileURL,
             selectedTerminalTabID: nil,
             deletableWorkspaceIDs: [alphaURL.standardizedFileURL, betaURL.standardizedFileURL]
@@ -149,6 +152,7 @@ final class WorktreeOverviewBuilderTests: XCTestCase {
             memos: [:],
             pullRequestStatuses: [:],
             pullRequestLoadingWorkspaceIDs: [rootURL.standardizedFileURL],
+            pullingWorkspaceIDs: [],
             activeWorkspaceID: rootURL.standardizedFileURL,
             selectedTerminalTabID: nil,
             deletableWorkspaceIDs: [rootURL.standardizedFileURL]
@@ -156,5 +160,78 @@ final class WorktreeOverviewBuilderTests: XCTestCase {
 
         XCTAssertEqual(items.first?.isPullRequestLoading, true)
         XCTAssertNil(items.first?.pullRequestStatus)
+    }
+
+    func testPullingFlagIsAttachedOnlyToPullingWorkspace() {
+        let pullingURL = URL(filePath: "/tmp/Pulling")
+        let idleURL = URL(filePath: "/tmp/Idle")
+
+        let items = WorktreeOverviewBuilder.items(
+            projectWorkspaces: [
+                ProjectWorkspaceSnapshot(id: pullingURL, url: pullingURL),
+                ProjectWorkspaceSnapshot(id: idleURL, url: idleURL)
+            ],
+            terminalWorkspaces: [],
+            branchStates: [
+                pullingURL.standardizedFileURL: .branch("main"),
+                idleURL.standardizedFileURL: .branch("feature/idle")
+            ],
+            memos: [:],
+            pullRequestStatuses: [:],
+            pullRequestLoadingWorkspaceIDs: [],
+            pullingWorkspaceIDs: [pullingURL.standardizedFileURL],
+            activeWorkspaceID: pullingURL.standardizedFileURL,
+            selectedTerminalTabID: nil,
+            deletableWorkspaceIDs: []
+        )
+
+        XCTAssertEqual(items.first { $0.id == pullingURL.standardizedFileURL }?.isPulling, true)
+        XCTAssertEqual(items.first { $0.id == idleURL.standardizedFileURL }?.isPulling, false)
+    }
+
+    func testCopyableBranchNameIsProvidedOnlyForRealBranches() {
+        XCTAssertEqual(makeItem(branch: .branch("main")).copyableBranchName, "main")
+        XCTAssertEqual(makeItem(branch: .unborn("feature/x")).copyableBranchName, "feature/x")
+        XCTAssertNil(makeItem(branch: .detached("abc1234")).copyableBranchName)
+        XCTAssertNil(makeItem(branch: nil).copyableBranchName)
+    }
+
+    func testCopyablePullRequestURLIsProvidedOnlyForExistingPullRequests() {
+        let pullRequestURL = URL(string: "https://github.com/owner/repo/pull/42")!
+        let pullRequest = GitHubPullRequestInfo(
+            number: 42,
+            url: pullRequestURL,
+            lifecycleState: .open
+        )
+        let creationLink = GitHubPullRequestCreationLink(
+            baseBranch: "main",
+            headBranch: "feature/x",
+            url: URL(string: "https://github.com/owner/repo/compare/main...feature/x")!
+        )
+
+        XCTAssertEqual(
+            makeItem(pullRequestStatus: .pullRequest(pullRequest)).copyablePullRequestURL,
+            pullRequestURL
+        )
+        XCTAssertNil(makeItem(pullRequestStatus: .create(creationLink)).copyablePullRequestURL)
+        XCTAssertNil(makeItem(pullRequestStatus: nil).copyablePullRequestURL)
+    }
+
+    private func makeItem(
+        branch: GitBranchState? = .branch("main"),
+        pullRequestStatus: GitHubPullRequestStatus? = nil
+    ) -> WorktreeOverviewItem {
+        let rootURL = URL(filePath: "/tmp/Item")
+        return WorktreeOverviewItem(
+            workspace: ProjectWorkspaceSnapshot(id: rootURL, url: rootURL),
+            branch: branch,
+            memo: "",
+            pullRequestStatus: pullRequestStatus,
+            isPullRequestLoading: false,
+            isPulling: false,
+            terminals: [],
+            isActive: false,
+            canDelete: false
+        )
     }
 }

@@ -8,6 +8,7 @@ import SwiftUI
 struct EditorPaneView: View {
     @ObservedObject var runtimeStore: EditorRuntimeStore
     @ObservedObject var terminalState: TerminalViewModel
+    let paneFocus: PaneFocusStore
     @State private var reviewDiffDisplayMode = ReviewDiffDisplayMode.unified
     @State private var reviewDiffWrapLines = true
 
@@ -21,6 +22,7 @@ struct EditorPaneView: View {
             reviewDiffDisplayMode: $reviewDiffDisplayMode,
             reviewDiffWrapLines: $reviewDiffWrapLines,
             runtimeStore: runtimeStore,
+            paneFocus: paneFocus,
             terminalState: TerminalPaneHostState(
                 workspaceURL: terminalState.activeWorkspaceURL,
                 tabs: terminalState.tabs,
@@ -62,6 +64,7 @@ struct EditorPaneView: View {
     EditorPaneView(
         runtimeStore: EditorRuntimeStore(),
         terminalState: TerminalViewModel(),
+        paneFocus: PaneFocusStore(),
         state: EditorPaneHostState(
             workspaceID: URL(filePath: "/tmp"),
             editorMode: .edit,
@@ -71,6 +74,8 @@ struct EditorPaneView: View {
             isLoadingReviewDiffRemoteBranches: false,
             reviewDiffRemoteBranchErrorMessage: nil,
             reviewDiffHideWhitespace: false,
+            reviewDiffViewedFilePaths: [],
+            reviewDiffViewedSyncsToPullRequest: false,
             tabs: [tab],
             selectedTabID: tab.id,
             findPresentationRequest: nil,
@@ -81,8 +86,10 @@ struct EditorPaneView: View {
             gitSnapshot: nil,
             githubAuthStatus: .unauthenticated,
             githubPullRequestStatus: nil,
+            isGithubPullRequestLoading: false,
             tabInputSetting: .defaultValue,
-            lineWrappingMode: .defaultValue
+            lineWrappingMode: .defaultValue,
+            visibleFocusedPane: nil
         ),
         actions: EditorPaneHostActions(
             editorSession: { _ in EditorDocumentSession() },
@@ -105,6 +112,7 @@ struct EditorPaneView: View {
             loadReviewDiffRemoteBranches: { _ in },
             refreshReviewDiff: {},
             setReviewDiffHideWhitespace: { _ in },
+            setReviewDiffFileViewed: { _, _ in },
             openReviewDiffFile: { _ in },
             closeTab: { _ in },
             moveTab: { _, _ in }

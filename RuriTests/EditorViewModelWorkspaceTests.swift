@@ -438,6 +438,367 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
         try await waitForReviewBase(secondEditor, .branch("origin/main"))
     }
 
+    func testReviewDiffViewedStateLoadsFromLocalStoreAndInvalidatesChangedFingerprints() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/local"
+        let metadataDirectoryURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+        try await store.saveViewedReviewFile(
+            path: "Matched.txt",
+            fingerprint: "fp-match",
+            forBranch: currentBranch,
+            metadataDirectoryURL: metadataDirectoryURL,
+            repositoryRootURL: nil
+        )
+        try await store.saveViewedReviewFile(
+            path: "Stale.txt",
+            fingerprint: "fp-old",
+            forBranch: currentBranch,
+            metadataDirectoryURL: metadataDirectoryURL,
+            repositoryRootURL: nil
+        )
+
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .uncommitted,
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "Matched.txt", contentFingerprint: "fp-match"),
+                makeReviewFileDiff(path: "Stale.txt", contentFingerprint: "fp-new")
+            ]
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [:]),
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        try await TestSupport.waitUntil("viewed file paths") {
+            editor.reviewDiffViewedFilePaths == ["Matched.txt"]
+        }
+        XCTAssertFalse(editor.reviewDiffViewedSyncsToPullRequest)
+    }
+
+    func testChangedLocalViewedEntryIsDismissedPersistently() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/local"
+        let metadataDirectoryURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+        try await store.saveViewedReviewFile(
+            path: "Stale.txt",
+            fingerprint: "fp-old",
+            forBranch: currentBranch,
+            metadataDirectoryURL: metadataDirectoryURL,
+            repositoryRootURL: nil
+        )
+
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .uncommitted,
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "Stale.txt", contentFingerprint: "fp-new")
+            ]
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [:]),
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        // 不一致を観測した時点でストアのエントリが削除され、内容が fp-old に戻っても復活しない。
+        try await TestSupport.waitUntil("dismissed viewed entry") {
+            await store.viewedReviewFiles(
+                forBranch: currentBranch,
+                metadataDirectoryURL: metadataDirectoryURL
+            ) == [:]
+        }
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, [])
+    }
+
+    func testSetReviewDiffFileViewedPersistsFingerprintToLocalStore() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/local"
+        let metadataDirectoryURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .uncommitted,
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "Changed.txt", contentFingerprint: "fp-changed")
+            ]
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [:]),
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        editor.setReviewDiffFileViewed(true, path: "Changed.txt")
+
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, ["Changed.txt"])
+        let store = WorktreeMetadataStore()
+        try await TestSupport.waitUntil("stored viewed entry") {
+            await store.viewedReviewFiles(
+                forBranch: currentBranch,
+                metadataDirectoryURL: metadataDirectoryURL
+            ) == ["Changed.txt": "fp-changed"]
+        }
+
+        editor.setReviewDiffFileViewed(false, path: "Changed.txt")
+
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, [])
+        try await TestSupport.waitUntil("removed viewed entry") {
+            await store.viewedReviewFiles(
+                forBranch: currentBranch,
+                metadataDirectoryURL: metadataDirectoryURL
+            ) == [:]
+        }
+    }
+
+    func testReviewDiffViewedStateUsesPullRequestAsSourceOfTruthAndSyncsToggles() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/pr"
+        let pullRequestStatus = GitHubPullRequestStatus.pullRequest(GitHubPullRequestInfo(
+            number: 42,
+            url: URL(string: "https://github.com/owner/repo/pull/42")!,
+            lifecycleState: .open
+        ))
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .branch("main"),
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "PRFile.txt", contentFingerprint: "fp-pr"),
+                makeReviewFileDiff(path: "LocalOnly.txt", contentFingerprint: "fp-local")
+            ]
+        )
+        let fileViewsService = EditorViewModelWorkspaceMockGitHubPullRequestFileViewsService(
+            result: .available(GitHubPullRequestFileViews(
+                pullRequestNodeID: "PR_node",
+                statesByPath: [
+                    "PRFile.txt": .viewed,
+                    "OutsideDiff.txt": .unviewed
+                ]
+            ))
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+                rootURL: [currentBranch: pullRequestStatus]
+            ]),
+            githubPullRequestFileViewsService: fileViewsService,
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        try await TestSupport.waitUntil("PR viewed state") {
+            editor.reviewDiffViewedSyncsToPullRequest
+                && editor.reviewDiffViewedFilePaths == ["PRFile.txt"]
+        }
+
+        editor.setReviewDiffFileViewed(false, path: "PRFile.txt")
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, [])
+        try await TestSupport.waitUntil("unmark mutation call") {
+            let calls = await fileViewsService.setCalls()
+            return calls.count == 1
+                && calls[0].viewed == false
+                && calls[0].pullRequestNodeID == "PR_node"
+                && calls[0].path == "PRFile.txt"
+                && FileURLRewriter.urlsMatch(calls[0].openedRootURL, rootURL)
+        }
+
+        // PRのファイル一覧に含まれないパスはローカル管理へフォールバックする。
+        editor.setReviewDiffFileViewed(true, path: "LocalOnly.txt")
+        let store = WorktreeMetadataStore()
+        try await TestSupport.waitUntil("local fallback entry") {
+            await store.viewedReviewFiles(
+                forBranch: currentBranch,
+                metadataDirectoryURL: rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+            ) == ["LocalOnly.txt": "fp-local"]
+        }
+        let setCalls = await fileViewsService.setCalls()
+        XCTAssertEqual(setCalls.count, 1)
+    }
+
+    func testToggleBeforePullRequestFileViewsLoadDefersRoutingToPullRequest() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/pr"
+        let pullRequestStatus = GitHubPullRequestStatus.pullRequest(GitHubPullRequestInfo(
+            number: 42,
+            url: URL(string: "https://github.com/owner/repo/pull/42")!,
+            lifecycleState: .open
+        ))
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .branch("main"),
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "PRFile.txt", contentFingerprint: "fp-pr")
+            ]
+        )
+        let fileViewsService = EditorViewModelWorkspaceMockGitHubPullRequestFileViewsService(
+            result: .available(GitHubPullRequestFileViews(
+                pullRequestNodeID: "PR_node",
+                statesByPath: ["PRFile.txt": .unviewed]
+            )),
+            fileViewsDelayNanoseconds: 1_000_000_000
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+                rootURL: [currentBranch: pullRequestStatus]
+            ]),
+            githubPullRequestFileViewsService: fileViewsService,
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        _ = try await waitForGitHubPullRequestStatus(editor)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        // fileViews のロード(1秒遅延)が完了する前にトグルする。
+        editor.setReviewDiffFileViewed(true, path: "PRFile.txt")
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, ["PRFile.txt"])
+
+        // ロード適用後、保留トグルが PR mutation として送られ、チェック状態が維持される。
+        try await TestSupport.waitUntil("deferred mutation call") {
+            let calls = await fileViewsService.setCalls()
+            return calls.contains { $0.viewed && $0.pullRequestNodeID == "PR_node" && $0.path == "PRFile.txt" }
+        }
+        XCTAssertTrue(editor.reviewDiffViewedFilePaths.contains("PRFile.txt"))
+
+        // ローカルストアには書かれていない(誤ルーティングしていない)。
+        let localEntries = await WorktreeMetadataStore().viewedReviewFiles(
+            forBranch: currentBranch,
+            metadataDirectoryURL: rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        )
+        XCTAssertEqual(localEntries, [:])
+    }
+
+    func testSetReviewDiffFileViewedRollsBackOnPullRequestMutationFailure() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let currentBranch = "feature/pr"
+        let pullRequestStatus = GitHubPullRequestStatus.pullRequest(GitHubPullRequestInfo(
+            number: 42,
+            url: URL(string: "https://github.com/owner/repo/pull/42")!,
+            lifecycleState: .open
+        ))
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .branch("main"),
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: [
+                makeReviewFileDiff(path: "PRFile.txt", contentFingerprint: "fp-pr")
+            ]
+        )
+        let fileViewsService = EditorViewModelWorkspaceMockGitHubPullRequestFileViewsService(
+            result: .available(GitHubPullRequestFileViews(
+                pullRequestNodeID: "PR_node",
+                statesByPath: ["PRFile.txt": .unviewed]
+            )),
+            setError: GitHubPullRequestFileViewsError.commandFailed("mutation failed")
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(rootURL: rootURL, branch: .branch(currentBranch))
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ]
+            ),
+            githubPullRequestService: EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+                rootURL: [currentBranch: pullRequestStatus]
+            ]),
+            githubPullRequestFileViewsService: fileViewsService,
+            isFileWatchingEnabled: false
+        )
+
+        await editor.openProject(rootURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+        try await TestSupport.waitUntil("PR viewed state") {
+            editor.reviewDiffViewedSyncsToPullRequest
+        }
+
+        editor.setReviewDiffFileViewed(true, path: "PRFile.txt")
+        XCTAssertEqual(editor.reviewDiffViewedFilePaths, ["PRFile.txt"])
+
+        try await TestSupport.waitUntil("optimistic rollback") {
+            editor.reviewDiffViewedFilePaths.isEmpty && editor.currentError != nil
+        }
+    }
+
     func testActivatingFileTreeFileInReviewModeSwitchesToEditMode() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }
@@ -692,6 +1053,212 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
                 openedRootURL: rootURL.standardizedFileURL
             )
         ])
+    }
+
+    func testGitHubPullRequestPollingRefreshesPeriodicallyWhileApplicationIsActive() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let pullRequest = GitHubPullRequestInfo(
+            number: 42,
+            url: URL(string: "https://github.com/owner/repo/pull/42")!,
+            lifecycleState: .open,
+            mergeableState: .mergeable
+        )
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+            rootURL.standardizedFileURL: [
+                "feature/status-pr": .pullRequest(pullRequest)
+            ]
+        ])
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(
+                        rootURL: rootURL,
+                        branch: .branch("feature/status-pr")
+                    )
+                ]
+            ),
+            githubPullRequestService: gitHubPullRequestService,
+            isFileWatchingEnabled: false,
+            githubPullRequestPollingIntervalNanoseconds: 20_000_000,
+            isApplicationActive: { true }
+        )
+
+        await editor.openProject(rootURL)
+
+        try await TestSupport.waitUntil("GitHub pull request polling calls") {
+            await gitHubPullRequestService.calls().count >= 3
+        }
+        XCTAssertEqual(editor.githubPullRequestStatus, .pullRequest(pullRequest))
+    }
+
+    func testGitHubPullRequestPollingDoesNotRunWhileApplicationIsInactive() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+            rootURL.standardizedFileURL: [
+                "feature/status-pr": .pullRequest(GitHubPullRequestInfo(
+                    number: 42,
+                    url: URL(string: "https://github.com/owner/repo/pull/42")!,
+                    lifecycleState: .open
+                ))
+            ]
+        ])
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(
+                        rootURL: rootURL,
+                        branch: .branch("feature/status-pr")
+                    )
+                ]
+            ),
+            githubPullRequestService: gitHubPullRequestService,
+            isFileWatchingEnabled: false,
+            githubPullRequestPollingIntervalNanoseconds: 20_000_000,
+            isApplicationActive: { false }
+        )
+
+        await editor.openProject(rootURL)
+        _ = try await waitForGitHubPullRequestStatus(editor)
+
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let calls = await gitHubPullRequestService.calls()
+        XCTAssertEqual(calls.count, 1, "初回の lookupKey 変更による取得以外は走らないこと")
+    }
+
+    func testGitHubPullRequestRefreshesImmediatelyOnApplicationActivation() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(pullRequests: [
+            rootURL.standardizedFileURL: [
+                "feature/status-pr": .pullRequest(GitHubPullRequestInfo(
+                    number: 42,
+                    url: URL(string: "https://github.com/owner/repo/pull/42")!,
+                    lifecycleState: .open
+                ))
+            ]
+        ])
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(
+                        rootURL: rootURL,
+                        branch: .branch("feature/status-pr")
+                    )
+                ]
+            ),
+            githubPullRequestService: gitHubPullRequestService,
+            isFileWatchingEnabled: false,
+            githubPullRequestPollingIntervalNanoseconds: 0,
+            isApplicationActive: { true }
+        )
+
+        await editor.openProject(rootURL)
+        _ = try await waitForGitHubPullRequestStatus(editor)
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        try await TestSupport.waitUntil("GitHub pull request refresh on activation") {
+            await gitHubPullRequestService.calls().count >= 2
+        }
+    }
+
+    func testGitHubPullRequestPollingDoesNotEnterLoadingState() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let pullRequest = GitHubPullRequestInfo(
+            number: 42,
+            url: URL(string: "https://github.com/owner/repo/pull/42")!,
+            lifecycleState: .open,
+            mergeableState: .mergeable
+        )
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(
+            pullRequests: [
+                rootURL.standardizedFileURL: [
+                    "feature/status-pr": .pullRequest(pullRequest)
+                ]
+            ],
+            responseDelayNanoseconds: 100_000_000
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(
+                        rootURL: rootURL,
+                        branch: .branch("feature/status-pr")
+                    )
+                ]
+            ),
+            githubPullRequestService: gitHubPullRequestService,
+            isFileWatchingEnabled: false,
+            githubPullRequestPollingIntervalNanoseconds: 20_000_000,
+            isApplicationActive: { true }
+        )
+
+        await editor.openProject(rootURL)
+        _ = try await waitForGitHubPullRequestStatus(editor)
+
+        // 2回目以降(ポーリング)の取得中も Loading にならず、前回の表示を保持する。
+        try await TestSupport.waitUntil("GitHub pull request polling call") {
+            await gitHubPullRequestService.calls().count >= 2
+        }
+        XCTAssertFalse(editor.githubPullRequestLoadingProjectIDs.contains(rootURL.standardizedFileURL))
+        XCTAssertEqual(editor.githubPullRequestStatus, .pullRequest(pullRequest))
+    }
+
+    func testGitHubPullRequestPollingPreservesDeterminateMergeableStateOnUnknown() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let pullRequestURL = URL(string: "https://github.com/owner/repo/pull/42")!
+        let conflictingStatus = GitHubPullRequestStatus.pullRequest(GitHubPullRequestInfo(
+            number: 42,
+            url: pullRequestURL,
+            lifecycleState: .open,
+            mergeableState: .conflicting
+        ))
+        let unknownStatus = GitHubPullRequestStatus.pullRequest(GitHubPullRequestInfo(
+            number: 42,
+            url: pullRequestURL,
+            lifecycleState: .open,
+            mergeableState: .unknown
+        ))
+        let gitHubPullRequestService = EditorViewModelWorkspaceMockGitHubPullRequestService(
+            pullRequests: [:],
+            statusSequence: [conflictingStatus, unknownStatus]
+        )
+        let editor = EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: makeGitSnapshot(
+                        rootURL: rootURL,
+                        branch: .branch("feature/status-pr")
+                    )
+                ]
+            ),
+            githubPullRequestService: gitHubPullRequestService,
+            isFileWatchingEnabled: false,
+            githubPullRequestPollingIntervalNanoseconds: 20_000_000,
+            isApplicationActive: { true }
+        )
+
+        await editor.openProject(rootURL)
+        try await waitForGitHubPullRequestStatus(
+            editor,
+            workspaceID: rootURL.standardizedFileURL,
+            expectedStatus: conflictingStatus
+        )
+
+        // 以降のポーリングは UNKNOWN を返し続けるが、確定済みの conflicting を保持する。
+        try await TestSupport.waitUntil("GitHub pull request polling calls after unknown") {
+            await gitHubPullRequestService.calls().count >= 3
+        }
+        XCTAssertEqual(editor.githubPullRequestStatus, conflictingStatus)
     }
 
     func testGitHubPullRequestFollowsActiveWorkspace() async throws {
@@ -1108,6 +1675,196 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
             try String(contentsOf: worktreeURL.appending(path: "initialized.txt"), encoding: .utf8),
             "npm install\n"
         )
+    }
+
+    func testConfirmExternalPullRequestWorktreeCreationIgnoresConcurrentSecondConfirmation() async throws {
+        let parentURL = try makeTemporaryDirectory()
+        let remoteURL = parentURL.appending(path: "remote.git", directoryHint: .isDirectory)
+        let seedURL = parentURL.appending(path: "seed", directoryHint: .isDirectory)
+        let projectURL = parentURL.appending(path: "Project", directoryHint: .isDirectory)
+        let rootURL = projectURL.appending(path: "repo", directoryHint: .isDirectory)
+        defer { try? fileManager.removeItem(at: parentURL) }
+
+        try fileManager.createDirectory(at: seedURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: projectURL, withIntermediateDirectories: true)
+        try runGit(["init", "--bare", "-b", "main", remoteURL.path(percentEncoded: false)], in: parentURL)
+        try initializeRepository(at: seedURL)
+        try "base\n".write(to: seedURL.appending(path: "Base.txt"), atomically: true, encoding: .utf8)
+        try runGit(["add", "Base.txt"], in: seedURL)
+        try runGit(["commit", "-m", "base"], in: seedURL)
+        try runGit(["remote", "add", "origin", remoteURL.path(percentEncoded: false)], in: seedURL)
+        try runGit(["push", "-u", "origin", "main"], in: seedURL)
+        try runGit(["clone", remoteURL.path(percentEncoded: false), rootURL.path(percentEncoded: false)], in: projectURL)
+        try runGit(["config", "user.email", "test@example.com"], in: rootURL)
+        try runGit(["config", "user.name", "Test"], in: rootURL)
+        try runGit(["switch", "-c", "feature"], in: seedURL)
+        try "remote branch\n".write(to: seedURL.appending(path: "RemoteBranch.txt"), atomically: true, encoding: .utf8)
+        try runGit(["add", "RemoteBranch.txt"], in: seedURL)
+        try runGit(["commit", "-m", "remote branch"], in: seedURL)
+        try runGit(["push", "-u", "origin", "feature"], in: seedURL)
+
+        let initializationService = RecordingWorktreeInitializationService()
+        let editor = EditorViewModel(
+            worktreeInitializationService: initializationService,
+            isFileWatchingEnabled: false
+        )
+        await editor.openProject(rootURL)
+        let request = ExternalPullRequestWorktreeCreationRequest(
+            pullRequestNumber: 1,
+            repository: GitHubRepositoryIdentity(owner: "owner", name: "repo"),
+            headBranchName: "feature",
+            remoteBranchName: "origin/feature",
+            sourceWorkspaceID: rootURL
+        )
+
+        async let firstConfirmation: Void = editor.confirmExternalPullRequestWorktreeCreation(request)
+        async let secondConfirmation: Void = editor.confirmExternalPullRequestWorktreeCreation(request)
+        _ = await (firstConfirmation, secondConfirmation)
+
+        XCTAssertNil(editor.errorMessage)
+        XCTAssertFalse(editor.isCreatingExternalPullRequestWorktree)
+        XCTAssertEqual(
+            editor.projectWorkspaces.filter { $0.url.lastPathComponent == "feature" }.count,
+            1
+        )
+    }
+
+    func testPullWorktreeIgnoresSecondPullWhileFirstIsInFlight() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let gate = AsyncTestGate()
+        let gitService = EditorViewModelWorkspaceMockGitService(snapshots: [:])
+        gitService.pullHandler = { _ in await gate.wait() }
+
+        let editor = EditorViewModel(gitService: gitService, isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        let workspaceID = try XCTUnwrap(editor.activeProjectID)
+
+        let firstPull = Task { @MainActor in
+            try await editor.pullWorktree(workspaceID)
+        }
+        try await waitUntil { gitService.pullCalls().count == 1 }
+        XCTAssertTrue(editor.pullingWorkspaceIDs.contains(workspaceID))
+
+        let secondResult = try await editor.pullWorktree(workspaceID)
+
+        XCTAssertFalse(secondResult)
+        XCTAssertEqual(gitService.pullCalls().count, 1)
+
+        await gate.open()
+        let firstResult = try await firstPull.value
+
+        XCTAssertTrue(firstResult)
+        XCTAssertTrue(editor.pullingWorkspaceIDs.isEmpty)
+    }
+
+    func testPullWorktreeAllowsConcurrentPullsOnDifferentWorkspaces() async throws {
+        let parentURL = try makeTemporaryDirectory()
+        let baseURL = parentURL
+            .appending(path: "RuriProject", directoryHint: .isDirectory)
+            .appending(path: "ruri-base", directoryHint: .isDirectory)
+        let worktreeURL = parentURL
+            .appending(path: "RuriProject", directoryHint: .isDirectory)
+            .appending(path: "feature-one", directoryHint: .isDirectory)
+        defer { try? fileManager.removeItem(at: parentURL) }
+
+        try fileManager.createDirectory(at: baseURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+
+        let commonGitDirectoryURL = baseURL.appending(path: ".git", directoryHint: .isDirectory)
+        let worktrees = [
+            GitWorktreeInfo(rootURL: baseURL, branch: .branch("main"), headRevision: nil, kind: .main),
+            GitWorktreeInfo(rootURL: worktreeURL, branch: .branch("feature-one"), headRevision: nil, kind: .linked)
+        ]
+        let gate = AsyncTestGate()
+        let gitService = EditorViewModelWorkspaceMockGitService(
+            snapshots: [
+                baseURL.standardizedFileURL: makeGitSnapshot(
+                    rootURL: baseURL,
+                    branch: .branch("main"),
+                    worktreeKind: .main,
+                    worktreeRootURLs: [baseURL, worktreeURL],
+                    worktrees: worktrees,
+                    isRuriStyleWorktree: true,
+                    gitCommonDirectoryURL: commonGitDirectoryURL
+                ),
+                worktreeURL.standardizedFileURL: makeGitSnapshot(
+                    rootURL: worktreeURL,
+                    branch: .branch("feature-one"),
+                    worktreeKind: .linked,
+                    worktreeRootURLs: [baseURL, worktreeURL],
+                    worktrees: worktrees,
+                    gitDirectoryURL: commonGitDirectoryURL
+                        .appending(path: "worktrees/feature-one", directoryHint: .isDirectory),
+                    gitCommonDirectoryURL: commonGitDirectoryURL
+                )
+            ]
+        )
+        gitService.pullHandler = { _ in await gate.wait() }
+
+        let editor = EditorViewModel(gitService: gitService, isFileWatchingEnabled: false)
+        await editor.openProject(baseURL)
+        let baseID = try XCTUnwrap(editor.activeProjectID)
+        let worktreeID = try XCTUnwrap(
+            editor.projectWorkspaces.first { $0.id != baseID }?.id
+        )
+
+        let basePull = Task { @MainActor in
+            try await editor.pullWorktree(baseID)
+        }
+        let worktreePull = Task { @MainActor in
+            try await editor.pullWorktree(worktreeID)
+        }
+        try await waitUntil { gitService.pullCalls().count == 2 }
+
+        XCTAssertEqual(editor.pullingWorkspaceIDs, [baseID, worktreeID])
+
+        await gate.open()
+        let baseResult = try await basePull.value
+        let worktreeResult = try await worktreePull.value
+
+        XCTAssertTrue(baseResult)
+        XCTAssertTrue(worktreeResult)
+        XCTAssertTrue(editor.pullingWorkspaceIDs.isEmpty)
+    }
+
+    func testPullWorktreeClearsPullingStateWhenPullThrows() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let gitService = EditorViewModelWorkspaceMockGitService(snapshots: [:])
+        gitService.pullHandler = { _ in throw GitPullError.timedOut }
+
+        let editor = EditorViewModel(gitService: gitService, isFileWatchingEnabled: false)
+        await editor.openProject(rootURL)
+        let workspaceID = try XCTUnwrap(editor.activeProjectID)
+
+        do {
+            try await editor.pullWorktree(workspaceID)
+            XCTFail("Expected pullWorktree to rethrow the pull error")
+        } catch GitPullError.timedOut {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertTrue(editor.pullingWorkspaceIDs.isEmpty)
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition() {
+            guard Date() < deadline else {
+                XCTFail("Timed out waiting for condition", file: file, line: line)
+                throw CancellationError()
+            }
+            await Task.yield()
+        }
     }
 
     func testContentChangeRefreshesOnlyChangedWorktreeGitState() async throws {
@@ -2356,6 +3113,95 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
         XCTAssertTrue(NSEqualRanges(forwardSession.selectedRange, targetRange))
     }
 
+    func testNavigationHistoryRestoresEditorPlaceAcrossReviewModeSwitch() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let fileURL = rootURL.appending(path: "First.txt")
+        try "first".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let editor = makeReviewCapableEditor(rootURL: rootURL)
+
+        await editor.openProject(rootURL)
+        await editor.openFile(fileURL)
+        let tabID = try XCTUnwrap(editor.selectedTabID)
+        let originRange = NSRange(location: 0, length: 5)
+        editor.updateSelection(originRange, in: tabID)
+
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+        XCTAssertTrue(editor.canNavigateBack)
+
+        await editor.navigateBackInHistory()
+
+        XCTAssertEqual(editor.editorMode, .edit)
+        let backSession = try XCTUnwrap(editor.editorSession(for: tabID))
+        XCTAssertTrue(NSEqualRanges(backSession.selectedRange, originRange))
+        XCTAssertTrue(editor.canNavigateForward)
+
+        await editor.navigateForwardInHistory()
+
+        XCTAssertEqual(editor.editorMode, .review)
+    }
+
+    func testOpeningFileFromReviewModeRecordsReviewPlace() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let firstFileURL = rootURL.appending(path: "First.txt")
+        let secondFileURL = rootURL.appending(path: "Second.txt")
+        try "first".write(to: firstFileURL, atomically: true, encoding: .utf8)
+        try "second".write(to: secondFileURL, atomically: true, encoding: .utf8)
+
+        let editor = makeReviewCapableEditor(rootURL: rootURL)
+
+        await editor.openProject(rootURL)
+        await editor.openFile(firstFileURL)
+        editor.setEditorMode(.review)
+        _ = try await waitForReviewDiffLoaded(editor)
+
+        await editor.openFile(secondFileURL)
+
+        XCTAssertEqual(editor.editorMode, .edit)
+        let openedTab = try XCTUnwrap(editor.selectedTabID.flatMap { editor.tab(for: $0) })
+        XCTAssertTrue(FileURLRewriter.urlsMatch(openedTab.url, secondFileURL))
+
+        await editor.navigateBackInHistory()
+        XCTAssertEqual(editor.editorMode, .review)
+
+        await editor.navigateBackInHistory()
+        XCTAssertEqual(editor.editorMode, .edit)
+        let firstTab = try XCTUnwrap(editor.selectedTabID.flatMap { editor.tab(for: $0) })
+        XCTAssertTrue(FileURLRewriter.urlsMatch(firstTab.url, firstFileURL))
+
+        await editor.navigateForwardInHistory()
+        XCTAssertEqual(editor.editorMode, .review)
+
+        await editor.navigateForwardInHistory()
+        XCTAssertEqual(editor.editorMode, .edit)
+        let secondTab = try XCTUnwrap(editor.selectedTabID.flatMap { editor.tab(for: $0) })
+        XCTAssertTrue(FileURLRewriter.urlsMatch(secondTab.url, secondFileURL))
+    }
+
+    func testFailedReviewModeSwitchDoesNotRecordNavigationHistory() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let fileURL = rootURL.appending(path: "First.txt")
+        try "first".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
+
+        await editor.openProject(rootURL)
+        await editor.openFile(fileURL)
+        XCTAssertFalse(editor.canNavigateBack)
+
+        editor.setEditorMode(.review)
+
+        XCTAssertEqual(editor.editorMode, .edit)
+        XCTAssertFalse(editor.canNavigateBack)
+    }
+
     func testOpeningDifferentProjectDoesNotClearNavigationHistory() async throws {
         let firstRootURL = try makeTemporaryDirectory()
         let secondRootURL = try makeTemporaryDirectory()
@@ -2698,6 +3544,58 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
         return try XCTUnwrap(matchedCall, file: file, line: line)
     }
 
+    private func makeReviewFileDiff(path: String, contentFingerprint: String?) -> GitReviewFileDiff {
+        GitReviewFileDiff(
+            diff: SourceFileDiff(
+                oldRelativePath: path,
+                newRelativePath: path,
+                hunks: [
+                    SourceDiffHunk(
+                        oldStart: 1,
+                        oldLineCount: 1,
+                        newStart: 1,
+                        newLineCount: 1,
+                        lines: [
+                            SourceDiffLine(kind: .deletion, oldLineNumber: 1, newLineNumber: nil, content: "old"),
+                            SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 1, content: "new")
+                        ]
+                    )
+                ]
+            ),
+            contentFingerprint: contentFingerprint
+        )
+    }
+
+    private func makeReviewCapableEditor(rootURL: URL) -> EditorViewModel {
+        let currentBranch = "feature/local"
+        let repositorySnapshot = makeGitSnapshot(
+            rootURL: rootURL,
+            branch: .branch(currentBranch)
+        )
+        let reviewSnapshot = GitReviewDiffSnapshot(
+            base: .uncommitted,
+            targetBranch: .branch(currentBranch),
+            targetWorktreeRootURL: rootURL,
+            baseRevision: "abc123",
+            files: []
+        )
+
+        return EditorViewModel(
+            gitService: EditorViewModelWorkspaceMockGitService(
+                snapshots: [
+                    rootURL.standardizedFileURL: repositorySnapshot
+                ],
+                reviewDiffs: [
+                    rootURL.standardizedFileURL: reviewSnapshot
+                ],
+                expectedReviewBases: [
+                    rootURL.standardizedFileURL: .uncommitted
+                ]
+            ),
+            isFileWatchingEnabled: false
+        )
+    }
+
     private func makeGitSnapshot(
         rootURL: URL,
         branch: GitBranchState,
@@ -2734,6 +3632,61 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
     }
 }
 
+private actor EditorViewModelWorkspaceMockGitHubPullRequestFileViewsService: GitHubPullRequestFileViewsServiceProtocol {
+    struct SetCall: Equatable {
+        let viewed: Bool
+        let pullRequestNodeID: String
+        let path: String
+        let openedRootURL: URL
+    }
+
+    private let result: GitHubPullRequestFileViewsResult
+    private let setError: Error?
+    private let fileViewsDelayNanoseconds: UInt64
+    private var storedSetCalls: [SetCall] = []
+
+    init(
+        result: GitHubPullRequestFileViewsResult,
+        setError: Error? = nil,
+        fileViewsDelayNanoseconds: UInt64 = 0
+    ) {
+        self.result = result
+        self.setError = setError
+        self.fileViewsDelayNanoseconds = fileViewsDelayNanoseconds
+    }
+
+    func fileViews(
+        pullRequestNumber: Int,
+        openedRootURL: URL
+    ) async -> GitHubPullRequestFileViewsResult {
+        if fileViewsDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: fileViewsDelayNanoseconds)
+        }
+        return result
+    }
+
+    func setFileViewed(
+        _ viewed: Bool,
+        pullRequestNodeID: String,
+        path: String,
+        openedRootURL: URL
+    ) async throws {
+        storedSetCalls.append(SetCall(
+            viewed: viewed,
+            pullRequestNodeID: pullRequestNodeID,
+            path: path,
+            openedRootURL: openedRootURL
+        ))
+        if let setError {
+            throw setError
+        }
+    }
+
+    func setCalls() -> [SetCall] {
+        storedSetCalls
+    }
+}
+
 private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRequestServiceProtocol {
     struct Call: Equatable {
         let branchName: String
@@ -2744,12 +3697,14 @@ private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRe
     private let pullRequests: [URL: [String: GitHubPullRequestStatus]]
     private let pullRequestDetailsByRootAndNumber: [URL: [Int: GitHubPullRequestDetails]]
     private let responseDelayNanoseconds: UInt64
+    private var statusSequence: [GitHubPullRequestStatus?]
     private var storedCalls: [Call] = []
 
     init(
         pullRequests: [URL: [String: GitHubPullRequestStatus]],
         pullRequestDetailsByRootAndNumber: [URL: [Int: GitHubPullRequestDetails]] = [:],
-        responseDelayNanoseconds: UInt64 = 0
+        responseDelayNanoseconds: UInt64 = 0,
+        statusSequence: [GitHubPullRequestStatus?] = []
     ) {
         self.pullRequests = pullRequests.reduce(into: [:]) { result, entry in
             result[entry.key.standardizedFileURL] = entry.value
@@ -2758,6 +3713,7 @@ private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRe
             result[entry.key.standardizedFileURL] = entry.value
         }
         self.responseDelayNanoseconds = responseDelayNanoseconds
+        self.statusSequence = statusSequence
     }
 
     func pullRequestStatus(
@@ -2773,6 +3729,10 @@ private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRe
         ))
         if responseDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: responseDelayNanoseconds)
+        }
+        if !statusSequence.isEmpty {
+            // 最後の要素は以降の呼び出しでも返し続ける。
+            return statusSequence.count > 1 ? statusSequence.removeFirst() : statusSequence[0]
         }
         return pullRequests[openedRootURL]?[branchName]
     }
@@ -2791,6 +3751,22 @@ private actor EditorViewModelWorkspaceMockGitHubPullRequestService: GitHubPullRe
 
     func calls() -> [Call] {
         storedCalls
+    }
+}
+
+private actor AsyncTestGate {
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuations.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        continuations.forEach { $0.resume() }
+        continuations.removeAll()
     }
 }
 
@@ -2815,9 +3791,11 @@ nonisolated private final class EditorViewModelWorkspaceMockGitService: GitServi
     let expectedReviewBases: [URL: GitReviewDiffBase]
     let fileContentsByRootAndRevision: [URL: [String: [String: String]]]
     let githubRepositoryIdentitiesByRoot: [URL: [GitHubRepositoryIdentity]]
+    var pullHandler: (@Sendable (URL) async throws -> Void)?
     private let lock = NSLock()
     private var storedReviewDiffCalls: [ReviewDiffCall] = []
     private var storedReviewDiffUpdateCalls: [ReviewDiffUpdateCall] = []
+    private var storedPullCalls: [URL] = []
 
     init(
         snapshots: [URL: GitRepositorySnapshot],
@@ -2872,6 +3850,21 @@ nonisolated private final class EditorViewModelWorkspaceMockGitService: GitServi
 
     func switchBranch(named branchName: String, openedRootURL: URL) async throws {
         throw GitBranchSwitchError.notRepository(openedRootURL.standardizedFileURL)
+    }
+
+    func pull(openedRootURL: URL) async throws {
+        let openedRootURL = openedRootURL.standardizedFileURL
+        lock.lock()
+        storedPullCalls.append(openedRootURL)
+        lock.unlock()
+
+        try await pullHandler?(openedRootURL)
+    }
+
+    func pullCalls() -> [URL] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedPullCalls
     }
 
     func githubRepositoryIdentities(openedRootURL: URL) async -> [GitHubRepositoryIdentity] {

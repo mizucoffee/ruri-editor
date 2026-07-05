@@ -9,6 +9,7 @@ import SwiftUI
 // MARK: - Review Diff Root View
 
 struct ReviewDiffView: View {
+    let showsFocusLine: Bool
     let state: ReviewDiffState
     let selectedBase: GitReviewDiffBase?
     let localBranches: [GitLocalBranchInfo]
@@ -16,12 +17,15 @@ struct ReviewDiffView: View {
     let isLoadingRemoteBranches: Bool
     let remoteBranchErrorMessage: String?
     let hideWhitespace: Bool
+    let viewedFilePaths: Set<String>
+    let viewedStateSyncsToPullRequest: Bool
     @Binding var displayMode: ReviewDiffDisplayMode
     @Binding var wrapLines: Bool
     let selectBase: (GitReviewDiffBase) -> Void
     let loadRemoteBranches: (Bool) -> Void
     let refresh: () -> Void
     let setHideWhitespace: (Bool) -> Void
+    let setFileViewed: (String, Bool) -> Void
     let openFile: (URL) -> Void
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
@@ -31,6 +35,15 @@ struct ReviewDiffView: View {
             header
             Divider()
             content
+                .overlay(alignment: .top) {
+                    if showsFocusLine {
+                        Rectangle()
+                            .fill(Color.accentColor)
+                            .frame(height: EditorMetrics.focusLineHeight)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: showsFocusLine)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
@@ -56,6 +69,10 @@ struct ReviewDiffView: View {
                 Spacer()
 
                 Text("\(snapshot.files.count) files")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text("\(viewedFileCount(in: snapshot)) / \(snapshot.files.count) viewed")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
@@ -174,13 +191,28 @@ struct ReviewDiffView: View {
                 )
             } else {
                 ScrollView {
+                    // 非lazyのVStackで全行を実体化し、総コンテンツ高を常に正確に保つ
+                    // (LazyVStackは未実体化行の高さを平均で推定するためスクロールバーが飛ぶ)。
+                    // 行高固定で高さは事前計算できるため各行は軽く、NSScrollViewを持つ
+                    // 重いペインだけを ReviewDiffFileView がビューポート近傍で生成する。
+                    // 全ペイン即時実体化はウィンドウ内のスクロールビュー数が数百〜数千に達し
+                    // AppKitのレイアウト/追跡登録がハングするため必ず避けること。
                     VStack(alignment: .leading, spacing: 12) {
-                        ForEach(snapshot.files) { file in
+                        ForEach(Array(snapshot.files.enumerated()), id: \.element.id) { index, file in
+                            let isViewed = viewedFilePaths.contains(file.displayRelativePath)
                             ReviewDiffFileView(
                                 file: file,
                                 targetWorktreeRootURL: snapshot.targetWorktreeRootURL,
                                 displayMode: displayMode,
                                 wrapLines: wrapLines,
+                                isViewed: isViewed,
+                                initiallyExpanded: ReviewDiffExpansionPolicy.initiallyExpanded(
+                                    isViewed: isViewed,
+                                    lineCount: file.diff.hunks.reduce(0) { $0 + $1.lines.count },
+                                    fileIndex: index
+                                ),
+                                viewedStateSyncsToPullRequest: viewedStateSyncsToPullRequest,
+                                setViewed: { setFileViewed(file.displayRelativePath, $0) },
                                 openFile: openFile,
                                 requestCodeNavigation: requestCodeNavigation,
                                 codeNavigationHoverRange: codeNavigationHoverRange
@@ -202,6 +234,10 @@ struct ReviewDiffView: View {
     private var isLoading: Bool {
         guard case .loading = state else { return false }
         return true
+    }
+
+    private func viewedFileCount(in snapshot: GitReviewDiffSnapshot) -> Int {
+        snapshot.files.filter { viewedFilePaths.contains($0.displayRelativePath) }.count
     }
 }
 
@@ -511,12 +547,43 @@ private struct ReviewDiffFileView: View {
     let targetWorktreeRootURL: URL
     let displayMode: ReviewDiffDisplayMode
     let wrapLines: Bool
+    let isViewed: Bool
+    let viewedStateSyncsToPullRequest: Bool
+    let setViewed: (Bool) -> Void
     let openFile: (URL) -> Void
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isExpanded = true
+    @State private var isExpanded: Bool
     @State private var syntaxHighlights = ReviewDiffSyntaxHighlights.empty
+    @State private var didCopyPath = false
+    @State private var isNearViewport = false
+
+    init(
+        file: GitReviewFileDiff,
+        targetWorktreeRootURL: URL,
+        displayMode: ReviewDiffDisplayMode,
+        wrapLines: Bool,
+        isViewed: Bool,
+        initiallyExpanded: Bool,
+        viewedStateSyncsToPullRequest: Bool,
+        setViewed: @escaping (Bool) -> Void,
+        openFile: @escaping (URL) -> Void,
+        requestCodeNavigation: @escaping (ReviewDiffCodeNavigationRequest) -> Void,
+        codeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?
+    ) {
+        self.file = file
+        self.targetWorktreeRootURL = targetWorktreeRootURL
+        self.displayMode = displayMode
+        self.wrapLines = wrapLines
+        self.isViewed = isViewed
+        self.viewedStateSyncsToPullRequest = viewedStateSyncsToPullRequest
+        self.setViewed = setViewed
+        self.openFile = openFile
+        self.requestCodeNavigation = requestCodeNavigation
+        self.codeNavigationHoverRange = codeNavigationHoverRange
+        _isExpanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         let currentSyntaxHighlightRequestID = syntaxHighlightRequestID
@@ -539,6 +606,7 @@ private struct ReviewDiffFileView: View {
                         newFileURL: newFileURL,
                         displayMode: displayMode,
                         wrapLines: wrapLines,
+                        isNearViewport: isNearViewport,
                         syntaxHighlights: currentSyntaxHighlights,
                         requestCodeNavigation: requestCodeNavigation,
                         codeNavigationHoverRange: codeNavigationHoverRange
@@ -553,9 +621,17 @@ private struct ReviewDiffFileView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
         }
+        .background {
+            // onGeometryChange + .scrollView 座標系は macOS では NSScrollView の
+            // スクロールで再評価されず判定が凍結するため、AppKit の clip bounds
+            // 通知を購読するセンサーで可視近傍を検出する。
+            ReviewDiffVisibilitySensor { newValue in
+                isNearViewport = newValue
+            }
+        }
         .task(id: syntaxHighlightRequestID) {
             syntaxHighlights = .empty
-            guard isExpanded else {
+            guard isExpanded, isNearViewport else {
                 return
             }
 
@@ -566,6 +642,9 @@ private struct ReviewDiffFileView: View {
             )
             guard !Task.isCancelled else { return }
             syntaxHighlights = highlights
+        }
+        .onChange(of: isViewed) { _, newValue in
+            isExpanded = !newValue
         }
     }
 
@@ -587,23 +666,27 @@ private struct ReviewDiffFileView: View {
             ReviewDiffStatusBadge(status: file.status)
 
             VStack(alignment: .leading, spacing: 2) {
-                if let newFileURL {
-                    Button {
-                        openFile(newFileURL)
-                    } label: {
+                HStack(spacing: 6) {
+                    if let newFileURL {
+                        Button {
+                            openFile(newFileURL)
+                        } label: {
+                            Text(file.displayRelativePath)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open file")
+                        .accessibilityLabel("Open \(file.displayRelativePath)")
+                    } else {
                         Text(file.displayRelativePath)
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .buttonStyle(.plain)
-                    .help("Open file")
-                    .accessibilityLabel("Open \(file.displayRelativePath)")
-                } else {
-                    Text(file.displayRelativePath)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+
+                    copyPathButton
                 }
 
                 if let oldPath = file.oldRelativePath,
@@ -620,10 +703,63 @@ private struct ReviewDiffFileView: View {
             Spacer()
 
             ReviewDiffSummary(additions: file.additions, deletions: file.deletions)
+
+            viewedButton
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var copyPathButton: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(file.displayRelativePath, forType: .string)
+            didCopyPath = true
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                didCopyPath = false
+            }
+        } label: {
+            Image(systemName: didCopyPath ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(didCopyPath ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(AppText.copyFilePathCommand)
+        .accessibilityLabel("Copy file path")
+    }
+
+    private var viewedButton: some View {
+        Toggle(
+            "Viewed",
+            isOn: Binding(
+                get: { isViewed },
+                set: { setViewed($0) }
+            )
+        )
+        .toggleStyle(.checkbox)
+        .controlSize(.small)
+        .fixedSize()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Color(nsColor: isViewed ? .windowBackgroundColor : .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 1)
+        }
+        .help(viewedButtonHelp)
+        .accessibilityLabel("Mark \(file.displayRelativePath) as viewed")
+    }
+
+    private var viewedButtonHelp: String {
+        let action = isViewed ? "Mark as not viewed" : "Mark as viewed"
+        return viewedStateSyncsToPullRequest ? "\(action) (synced with the pull request)" : action
     }
 
     private func noPreviewRow(_ message: String) -> some View {
@@ -639,6 +775,7 @@ private struct ReviewDiffFileView: View {
         hasher.combine(file.id)
         hasher.combine(file.isBinary)
         hasher.combine(isExpanded)
+        hasher.combine(isNearViewport)
         hasher.combine(colorScheme == .dark)
         for hunk in file.diff.hunks {
             hasher.combine(hunk.oldStart)
@@ -905,6 +1042,12 @@ private extension SourceDiffLine.Kind {
 
 enum ReviewDiffLayout {
     static let minimumContentWidth: CGFloat = 760
+
+    /// 1ペイン(NSTextView)あたりの最大行数。レイヤーバックのビューは
+    /// Retina(2x)でおよそ8,000pt(Metalテクスチャ上限16384px)を超えた部分の
+    /// 描画が破棄されるため、長いファイルはこの行数ごとにペインを分割して
+    /// 積み上げる。256行 × 約20pt ≈ 5,100pt で上限に対して十分な余裕を持つ。
+    static let maxLinesPerPane = 256
     static let codeFontSize: CGFloat = 12
     static let lineNumberWidth: CGFloat = 52
     static let lineNumberTrailingPadding: CGFloat = 8
@@ -950,73 +1093,289 @@ private struct ReviewDiffFileContentView: View {
     let newFileURL: URL?
     let displayMode: ReviewDiffDisplayMode
     let wrapLines: Bool
+    let isNearViewport: Bool
     let syntaxHighlights: ReviewDiffSyntaxHighlights
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
+    @State private var horizontalSync = ReviewDiffFileHorizontalSyncGroups()
 
     var body: some View {
         switch displayMode {
         case .unified:
-            let document = ReviewDiffRenderedDocument.unified(
-                file: file,
-                oldFileURL: oldFileURL,
-                newFileURL: newFileURL
-            )
-            ReviewDiffTextPane(
-                document: document,
-                syntaxHighlights: syntaxHighlights,
-                wrapLines: wrapLines,
-                requestCodeNavigation: requestCodeNavigation,
-                codeNavigationHoverRange: codeNavigationHoverRange
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(minHeight: estimatedPaneHeight(for: document))
-            .fixedSize(horizontal: false, vertical: true)
-
-        case .sideBySide:
-            let oldDocument = ReviewDiffRenderedDocument.sideBySide(
-                file: file,
-                side: .old,
-                fileURL: oldFileURL
-            )
-            let newDocument = ReviewDiffRenderedDocument.sideBySide(
-                file: file,
-                side: .new,
-                fileURL: newFileURL
-            )
-            HStack(alignment: .top, spacing: 0) {
-                ReviewDiffTextPane(
-                    document: oldDocument,
-                    syntaxHighlights: syntaxHighlights,
-                    wrapLines: false,
-                    requestCodeNavigation: requestCodeNavigation,
-                    codeNavigationHoverRange: codeNavigationHoverRange
+            if !isNearViewport {
+                // オフスクリーンではドキュメント構築もNSScrollView生成もせず、
+                // 実体化後と同一高さの空プレースホルダだけを置く(スクロールバー安定のため
+                // 高さは行数から厳密に一致させる)。
+                panePlaceholder(totalLineCount: ReviewDiffRenderedDocument.unifiedLineCount(for: file))
+            } else {
+                let documents = ReviewDiffRenderedDocument.unifiedDocuments(
+                    for: file,
+                    oldFileURL: oldFileURL,
+                    newFileURL: newFileURL,
+                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
                 )
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Divider()
-
-                ReviewDiffTextPane(
-                    document: newDocument,
-                    syntaxHighlights: syntaxHighlights,
-                    wrapLines: false,
-                    requestCodeNavigation: requestCodeNavigation,
-                    codeNavigationHoverRange: codeNavigationHoverRange
-                )
+                let fileCodeWidth = documents.map(\.maximumCodeWidth).max() ?? 0
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(documents.indices, id: \.self) { index in
+                        ReviewDiffChunkedTextPane(
+                            document: documents[index],
+                            minimumCodeWidth: fileCodeWidth,
+                            syntaxHighlights: syntaxHighlights,
+                            wrapLines: wrapLines,
+                            horizontalSync: wrapLines ? nil : horizontalSync.unified,
+                            requestCodeNavigation: requestCodeNavigation,
+                            codeNavigationHoverRange: codeNavigationHoverRange
+                        )
+                    }
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(minHeight: max(estimatedPaneHeight(for: oldDocument), estimatedPaneHeight(for: newDocument)))
-            .fixedSize(horizontal: false, vertical: true)
+
+        case .sideBySide:
+            if !isNearViewport {
+                // old/new はペア化により常に同一行数のため、片側の行数で高さが確定する。
+                panePlaceholder(totalLineCount: ReviewDiffRenderedDocument.sideBySideLineCount(for: file))
+            } else {
+                let oldDocuments = ReviewDiffRenderedDocument.sideBySideDocuments(
+                    for: file,
+                    side: .old,
+                    fileURL: oldFileURL,
+                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
+                )
+                let newDocuments = ReviewDiffRenderedDocument.sideBySideDocuments(
+                    for: file,
+                    side: .new,
+                    fileURL: newFileURL,
+                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
+                )
+                let oldCodeWidth = oldDocuments.map(\.maximumCodeWidth).max() ?? 0
+                let newCodeWidth = newDocuments.map(\.maximumCodeWidth).max() ?? 0
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(oldDocuments.indices, id: \.self) { index in
+                        HStack(alignment: .top, spacing: 0) {
+                            ReviewDiffChunkedTextPane(
+                                document: oldDocuments[index],
+                                minimumCodeWidth: oldCodeWidth,
+                                syntaxHighlights: syntaxHighlights,
+                                wrapLines: false,
+                                horizontalSync: horizontalSync.old,
+                                requestCodeNavigation: requestCodeNavigation,
+                                codeNavigationHoverRange: codeNavigationHoverRange
+                            )
+
+                            Divider()
+
+                            ReviewDiffChunkedTextPane(
+                                document: newDocuments[index],
+                                minimumCodeWidth: newCodeWidth,
+                                syntaxHighlights: syntaxHighlights,
+                                wrapLines: false,
+                                horizontalSync: horizontalSync.new,
+                                requestCodeNavigation: requestCodeNavigation,
+                                codeNavigationHoverRange: codeNavigationHoverRange
+                            )
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
-    private func estimatedPaneHeight(for document: ReviewDiffRenderedDocument) -> CGFloat {
-        ReviewDiffScrollLayout.estimatedDocumentHeight(
+    private func panePlaceholder(totalLineCount: Int) -> some View {
+        Color.clear
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
+                totalLineCount: totalLineCount,
+                maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane,
+                lineHeight: ReviewDiffLayout.codeLineHeight,
+                textInsetHeight: ReviewDiffLayout.textContainerInset.height
+            ))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Chunked Text Pane
+
+/// 1チャンク分のペイン。チャンク単位でもビューポート近傍判定を行い、
+/// 範囲外は同一高さのプレースホルダに置き換える(巨大ファイルでも
+/// 実体化されるNSScrollView/NSTextViewを可視近傍分に抑える)。
+private struct ReviewDiffChunkedTextPane: View {
+    let document: ReviewDiffRenderedDocument
+    let minimumCodeWidth: CGFloat
+    let syntaxHighlights: ReviewDiffSyntaxHighlights
+    let wrapLines: Bool
+    let horizontalSync: ReviewDiffPaneHorizontalSync?
+    let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
+    let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
+    @State private var isNearViewport = false
+
+    var body: some View {
+        Group {
+            if isNearViewport {
+                ReviewDiffTextPane(
+                    document: document,
+                    minimumCodeWidth: minimumCodeWidth,
+                    syntaxHighlights: syntaxHighlights,
+                    wrapLines: wrapLines,
+                    horizontalSync: horizontalSync,
+                    requestCodeNavigation: requestCodeNavigation,
+                    codeNavigationHoverRange: codeNavigationHoverRange
+                )
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: ReviewDiffScrollLayout.estimatedDocumentHeight(
             lineCount: document.lineCount,
             lineHeight: ReviewDiffLayout.codeLineHeight,
             textInsetHeight: ReviewDiffLayout.textContainerInset.height
+        ))
+        .fixedSize(horizontal: false, vertical: true)
+        .background {
+            ReviewDiffVisibilitySensor { newValue in
+                isNearViewport = newValue
+            }
+        }
+    }
+}
+
+// MARK: - Visibility Sensor
+
+/// 外側スクロールビューの clip bounds 変更(=スクロール)を購読し、
+/// 自身がビューポートの前後1画面以内に入っているかを通知する透明ビュー。
+/// SwiftUI の onGeometryChange は macOS では NSScrollView のスクロールで
+/// 再評価されないため、可視近傍判定は必ずこのセンサーで行う。
+private struct ReviewDiffVisibilitySensor: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ReviewDiffVisibilitySensorView {
+        ReviewDiffVisibilitySensorView()
+    }
+
+    func updateNSView(_ nsView: ReviewDiffVisibilitySensorView, context: Context) {
+        nsView.onChange = onChange
+    }
+}
+
+@MainActor
+private final class ReviewDiffVisibilitySensorView: NSView {
+    var onChange: ((Bool) -> Void)?
+    private var lastIsNear: Bool?
+    private weak var observedClipView: NSClipView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(geometryDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: self
         )
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observeEnclosingClipView()
+        evaluate()
+    }
+
+    private func observeEnclosingClipView() {
+        let clipView = enclosingScrollView?.contentView
+        guard clipView !== observedClipView else { return }
+
+        if let observedClipView {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSView.boundsDidChangeNotification,
+                object: observedClipView
+            )
+        }
+        observedClipView = clipView
+        if let clipView {
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(geometryDidChange(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: clipView
+            )
+        }
+    }
+
+    @objc private func geometryDidChange(_ notification: Notification) {
+        evaluate()
+    }
+
+    private func evaluate() {
+        guard window != nil else { return }
+
+        let isNear: Bool
+        if let clipView = enclosingScrollView?.contentView {
+            isNear = ReviewDiffScrollLayout.isNearViewport(
+                rowFrame: bounds,
+                viewportBounds: convert(clipView.bounds, from: clipView)
+            )
+        } else {
+            isNear = true
+        }
+        guard isNear != lastIsNear else { return }
+        lastIsNear = isNear
+
+        // 通知はレイアウトパス中にも届くため、SwiftUIのstate更新は次のランループへ。
+        let onChange = onChange
+        DispatchQueue.main.async {
+            onChange?(isNear)
+        }
+    }
+}
+
+// MARK: - Horizontal Scroll Sync
+
+/// 同一ファイル内のチャンク間で横スクロール位置を同期するグループ。
+/// side-by-side では old/new の列ごとに独立したグループを持つ。
+@MainActor
+private final class ReviewDiffFileHorizontalSyncGroups {
+    let unified = ReviewDiffPaneHorizontalSync()
+    let old = ReviewDiffPaneHorizontalSync()
+    let new = ReviewDiffPaneHorizontalSync()
+}
+
+@MainActor
+private final class ReviewDiffPaneHorizontalSync {
+    private let panes = NSHashTable<ReviewDiffTextPaneAppKitView>.weakObjects()
+    private(set) var originX: CGFloat = 0
+
+    func register(_ pane: ReviewDiffTextPaneAppKitView) {
+        panes.add(pane)
+    }
+
+    func paneDidScroll(_ pane: ReviewDiffTextPaneAppKitView, toOriginX originX: CGFloat) {
+        guard abs(originX - self.originX) > 0.5 else { return }
+        self.originX = originX
+        for member in panes.allObjects where member !== pane {
+            member.applySyncedHorizontalOrigin(originX)
+        }
+    }
+
+    func reset() {
+        originX = 0
     }
 }
 
@@ -1024,8 +1383,10 @@ private struct ReviewDiffFileContentView: View {
 
 private struct ReviewDiffTextPane: NSViewRepresentable {
     let document: ReviewDiffRenderedDocument
+    let minimumCodeWidth: CGFloat
     let syntaxHighlights: ReviewDiffSyntaxHighlights
     let wrapLines: Bool
+    let horizontalSync: ReviewDiffPaneHorizontalSync?
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
 
@@ -1036,8 +1397,10 @@ private struct ReviewDiffTextPane: NSViewRepresentable {
     func updateNSView(_ nsView: ReviewDiffTextPaneAppKitView, context: Context) {
         nsView.update(
             document: document,
+            minimumCodeWidth: minimumCodeWidth,
             syntaxHighlights: syntaxHighlights,
             wrapLines: wrapLines,
+            horizontalSync: horizontalSync,
             requestCodeNavigation: requestCodeNavigation,
             codeNavigationHoverRange: codeNavigationHoverRange
         )
@@ -1120,12 +1483,21 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
     private var gutterWidthConstraint: NSLayoutConstraint?
     private var document = ReviewDiffRenderedDocument.empty
     private var wrapLines = true
+    private var minimumDocumentCodeWidth: CGFloat = 0
+    private var horizontalSync: ReviewDiffPaneHorizontalSync?
+    private var isApplyingSyncScroll = false
+    private var hasReceivedDocument = false
     private var cachedIntrinsicHeight: CGFloat = ReviewDiffLayout.codeLineHeight
+    private var lastMeasuredLayout: ReviewDiffScrollLayout.MeasurementSignature?
 
     override init(frame frameRect: NSRect) {
         gutterView = ReviewDiffTextGutterView(textView: textView)
         super.init(frame: frameRect)
         setup()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     @available(*, unavailable)
@@ -1144,15 +1516,25 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
 
     func update(
         document: ReviewDiffRenderedDocument,
+        minimumCodeWidth: CGFloat,
         syntaxHighlights: ReviewDiffSyntaxHighlights,
         wrapLines: Bool,
+        horizontalSync: ReviewDiffPaneHorizontalSync?,
         requestCodeNavigation: @escaping (ReviewDiffCodeNavigationRequest) -> Void,
         codeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?
     ) {
+        // 初回update(近傍実体化直後)はコンテンツ変更ではないため、同期グループの
+        // 現在の横スクロール位置を引き継ぐ(リセットすると兄弟チャンクとずれる)。
+        let isInitialUpdate = !hasReceivedDocument
+        hasReceivedDocument = true
         let didChangeDocument = self.document != document
         let didChangeWrap = self.wrapLines != wrapLines
+        let didChangeMinimumWidth = self.minimumDocumentCodeWidth != minimumCodeWidth
         self.document = document
         self.wrapLines = wrapLines
+        self.minimumDocumentCodeWidth = minimumCodeWidth
+        self.horizontalSync = horizontalSync
+        horizontalSync?.register(self)
 
         scrollView.hasHorizontalScroller = !wrapLines
         textView.update(
@@ -1167,13 +1549,18 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         gutterView.document = document
         gutterView.needsDisplay = true
 
-        if didChangeDocument || didChangeWrap {
+        let didChangeContent = (didChangeDocument && !isInitialUpdate) || didChangeWrap
+        if didChangeDocument || didChangeWrap || didChangeMinimumWidth {
             textView.resetCodeNavigationHover()
+            lastMeasuredLayout = nil
         }
         if didChangeDocument {
             updateCachedIntrinsicHeight(estimatedDocumentHeight())
         }
-        updateTextLayout(resetHorizontalScroll: didChangeDocument || didChangeWrap)
+        if didChangeContent {
+            horizontalSync?.reset()
+        }
+        updateTextLayout(resetHorizontalScroll: didChangeContent)
     }
 
     private func setup() {
@@ -1236,10 +1623,26 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         }
         let textWidth = ReviewDiffScrollLayout.textWidth(
             viewportWidth: viewportWidth,
-            documentCodeWidth: document.maximumCodeWidth,
+            // 同一ファイルの全チャンクで横スクロール範囲を揃えるため、
+            // ファイル全体の最大コード幅を下限として使う。
+            documentCodeWidth: max(document.maximumCodeWidth, minimumDocumentCodeWidth),
             textInsetWidth: textView.textContainerInset.width,
             wrapLines: wrapLines
         )
+        // layout() はAppKitのレイアウトパスごとに呼ばれる。行高固定のため計測結果は
+        // (textWidth, wrapLines) にしか依存せず、署名一致なら ensureLayout・frame設定・
+        // intrinsic更新をすべてスキップしてレイアウトの連鎖増幅を断つ。
+        let signature = ReviewDiffScrollLayout.MeasurementSignature(
+            textWidth: textWidth,
+            wrapLines: wrapLines
+        )
+        guard ReviewDiffScrollLayout.needsRemeasure(
+            previous: lastMeasuredLayout,
+            candidate: signature,
+            forced: resetHorizontalScroll
+        ) else {
+            return
+        }
         if wrapLines {
             textView.isHorizontallyResizable = false
             textContainer.widthTracksTextView = true
@@ -1265,18 +1668,39 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
             ReviewDiffLayout.codeLineHeight,
             ceil(usedRect.height + textView.textContainerInset.height * 2)
         )
-        textView.frame = NSRect(x: 0, y: 0, width: textWidth, height: measuredHeight)
+        // setFrame がジオメトリ変更通知(ウィンドウ全体のスクロールビュー追跡再登録)の
+        // 発火源になるため、実際に変化があるときだけ書き込む。
+        let newFrame = NSRect(x: 0, y: 0, width: textWidth, height: measuredHeight)
+        if textView.frame != newFrame {
+            textView.frame = newFrame
+        }
         let horizontalOrigin = ReviewDiffScrollLayout.normalizedHorizontalOrigin(
-            currentOrigin: scrollView.contentView.bounds.minX,
+            currentOrigin: horizontalSync?.originX ?? scrollView.contentView.bounds.minX,
             documentWidth: textWidth,
             viewportWidth: viewportWidth,
             reset: resetHorizontalScroll
         )
+        isApplyingSyncScroll = true
         scrollView.contentView.scroll(to: NSPoint(x: horizontalOrigin, y: 0))
         scrollView.reflectScrolledClipView(scrollView.contentView)
+        isApplyingSyncScroll = false
         gutterView.needsDisplay = true
 
+        lastMeasuredLayout = signature
         updateCachedIntrinsicHeight(measuredHeight)
+    }
+
+    func applySyncedHorizontalOrigin(_ originX: CGFloat) {
+        isApplyingSyncScroll = true
+        defer { isApplyingSyncScroll = false }
+        let clamped = ReviewDiffScrollLayout.normalizedHorizontalOrigin(
+            currentOrigin: originX,
+            documentWidth: textView.frame.width,
+            viewportWidth: scrollView.contentView.bounds.width,
+            reset: false
+        )
+        scrollView.contentView.scroll(to: NSPoint(x: clamped, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func estimatedDocumentHeight() -> CGFloat {
@@ -1295,6 +1719,9 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
 
     @objc private func clipViewBoundsDidChange(_ notification: Notification) {
         gutterView.needsDisplay = true
+        if !isApplyingSyncScroll {
+            horizontalSync?.paneDidScroll(self, toOriginX: scrollView.contentView.bounds.minX)
+        }
     }
 
     @discardableResult
@@ -2038,6 +2465,7 @@ private extension ReviewDiffLayout {
 
 #Preview {
     ReviewDiffView(
+        showsFocusLine: false,
         state: .loaded(GitReviewDiffSnapshot(
             baseBranch: "main",
             targetBranch: .branch("feature/review"),
@@ -2070,12 +2498,15 @@ private extension ReviewDiffLayout {
         isLoadingRemoteBranches: false,
         remoteBranchErrorMessage: nil,
         hideWhitespace: false,
+        viewedFilePaths: [],
+        viewedStateSyncsToPullRequest: false,
         displayMode: .constant(.unified),
         wrapLines: .constant(true),
         selectBase: { _ in },
         loadRemoteBranches: { _ in },
         refresh: {},
         setHideWhitespace: { _ in },
+        setFileViewed: { _, _ in },
         openFile: { _ in },
         requestCodeNavigation: { _ in },
         codeNavigationHoverRange: { _ in nil }

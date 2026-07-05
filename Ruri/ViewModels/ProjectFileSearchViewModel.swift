@@ -252,21 +252,7 @@ final class ProjectFileSearchViewModel: ObservableObject {
         }
 
         self.results = results
-        repairSelection()
-    }
-
-    private func repairSelection() {
-        guard !results.isEmpty else {
-            selectedResultID = nil
-            return
-        }
-
-        if let selectedResultID,
-           results.contains(where: { $0.id == selectedResultID }) {
-            return
-        }
-
-        selectedResultID = results[0].id
+        selectedResultID = results.first?.id
     }
 
     private func moveSelection(offset: Int) {

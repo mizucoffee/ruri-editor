@@ -20,6 +20,7 @@ struct WorktreeOverviewItem: Identifiable, Equatable, Sendable {
     let memo: String
     let pullRequestStatus: GitHubPullRequestStatus?
     let isPullRequestLoading: Bool
+    let isPulling: Bool
     let terminals: [WorktreeOverviewTerminalItem]
     let isActive: Bool
     let canDelete: Bool
@@ -44,6 +45,24 @@ struct WorktreeOverviewItem: Identifiable, Equatable, Sendable {
             false
         }
     }
+
+    var copyableBranchName: String? {
+        switch branch {
+        case .branch(let name), .unborn(let name):
+            name
+        case .detached, nil:
+            nil
+        }
+    }
+
+    var copyablePullRequestURL: URL? {
+        switch pullRequestStatus {
+        case .pullRequest(let pullRequest):
+            pullRequest.url
+        case .create, nil:
+            nil
+        }
+    }
 }
 
 enum WorktreeOverviewBuilder {
@@ -54,6 +73,7 @@ enum WorktreeOverviewBuilder {
         memos: [ProjectWorkspaceSnapshot.ID: String],
         pullRequestStatuses: [ProjectWorkspaceSnapshot.ID: GitHubPullRequestStatus],
         pullRequestLoadingWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>,
+        pullingWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>,
         activeWorkspaceID: ProjectWorkspaceSnapshot.ID?,
         selectedTerminalTabID: TerminalTab.ID?,
         deletableWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>
@@ -77,6 +97,7 @@ enum WorktreeOverviewBuilder {
                 memo: memos[workspace.id] ?? "",
                 pullRequestStatus: pullRequestStatuses[workspace.id],
                 isPullRequestLoading: pullRequestLoadingWorkspaceIDs.contains(workspace.id),
+                isPulling: pullingWorkspaceIDs.contains(workspace.id),
                 terminals: terminals,
                 isActive: workspace.id == activeWorkspaceID,
                 canDelete: deletableWorkspaceIDs.contains(workspace.id)

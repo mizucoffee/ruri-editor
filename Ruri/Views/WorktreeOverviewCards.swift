@@ -11,6 +11,7 @@ struct BaseWorktreeOverviewCard: View {
     let selectProject: () -> Void
     let pullWorktree: () -> Void
     let selectTerminal: (TerminalTab.ID) -> Void
+    let notifyCopied: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -46,12 +47,20 @@ struct BaseWorktreeOverviewCard: View {
                 Button {
                     pullWorktree()
                 } label: {
-                    Image(systemName: "arrow.down")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
+                    Group {
+                        if item.isPulling {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(item.isPulling)
                 .help(AppText.pullWorktreeCommand)
                 .accessibilityLabel(AppText.pullWorktreeCommand)
             }
@@ -73,6 +82,9 @@ struct BaseWorktreeOverviewCard: View {
                 .stroke(isActive ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.16))
         }
         .onTapGesture(perform: selectProject)
+        .contextMenu {
+            worktreeCardContextMenuItems(for: item, notifyCopied: notifyCopied)
+        }
         .help(item.workspace.displayPath)
     }
 }
@@ -86,6 +98,7 @@ struct LinkedWorktreeOverviewCard: View {
     let deleteWorktree: (() -> Void)?
     let openPullRequest: (URL) -> Void
     let selectTerminal: (TerminalTab.ID) -> Void
+    let notifyCopied: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -108,6 +121,9 @@ struct LinkedWorktreeOverviewCard: View {
                 .stroke(isActive ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.16))
         }
         .onTapGesture(perform: selectProject)
+        .contextMenu {
+            worktreeCardContextMenuItems(for: item, notifyCopied: notifyCopied)
+        }
         .help(item.workspace.displayPath)
     }
 
@@ -179,6 +195,18 @@ struct LinkedWorktreeOverviewCard: View {
                                 }
                         }
 
+                        if pullRequest.showsConflicts {
+                            Text("Conflicts")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(GitHubPullRequestStatusColor.closed)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background {
+                                    Capsule()
+                                        .fill(GitHubPullRequestStatusColor.closed.opacity(0.12))
+                                }
+                        }
+
                         GitHubPullRequestLifecycleMark(state: pullRequest.lifecycleState)
                     }
                 }
@@ -229,6 +257,34 @@ struct LinkedWorktreeOverviewCard: View {
             }
         }
     }
+}
+
+@ViewBuilder
+private func worktreeCardContextMenuItems(
+    for item: WorktreeOverviewItem,
+    notifyCopied: @escaping (String) -> Void
+) -> some View {
+    if let branchName = item.copyableBranchName {
+        Button {
+            copyToPasteboard(branchName)
+            notifyCopied("Branch name copied.")
+        } label: {
+            Label(AppText.copyBranchNameCommand, systemImage: "doc.on.doc")
+        }
+    }
+    if let url = item.copyablePullRequestURL {
+        Button {
+            copyToPasteboard(url.absoluteString)
+            notifyCopied("Pull request URL copied.")
+        } label: {
+            Label(AppText.copyPullRequestURLCommand, systemImage: "link")
+        }
+    }
+}
+
+private func copyToPasteboard(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
 }
 
 private struct GitHubPullRequestLifecycleMark: View {

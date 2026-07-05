@@ -145,7 +145,7 @@ final class EditorPaneHostModelsTests: XCTestCase {
     func testGitHubStateForChecking() {
         let state = GitHubStatusBarState(status: .checking)
 
-        XCTAssertEqual(state.title, "GitHub")
+        XCTAssertEqual(state.title, "Checking...")
         XCTAssertEqual(state.toolTip, "Checking GitHub authentication.")
         XCTAssertEqual(state.accessibilityValue, "Checking GitHub authentication")
         XCTAssertNil(state.action)
@@ -155,7 +155,7 @@ final class EditorPaneHostModelsTests: XCTestCase {
     func testGitHubStateForAuthenticating() {
         let state = GitHubStatusBarState(status: .authenticating)
 
-        XCTAssertEqual(state.title, "GitHub")
+        XCTAssertEqual(state.title, "Logging in...")
         XCTAssertEqual(state.toolTip, "Starting GitHub login.")
         XCTAssertEqual(state.accessibilityValue, "Starting GitHub login")
         XCTAssertNil(state.action)
@@ -205,7 +205,29 @@ final class EditorPaneHostModelsTests: XCTestCase {
     // MARK: - GitHubPullRequestStatusBarState
 
     func testPullRequestStateIsNilWithoutStatus() {
-        XCTAssertNil(GitHubPullRequestStatusBarState(status: nil))
+        XCTAssertNil(GitHubPullRequestStatusBarState(status: nil, isLoading: false))
+    }
+
+    func testPullRequestStateShowsLoadingWhileRefreshing() {
+        let state = GitHubPullRequestStatusBarState(status: nil, isLoading: true)
+
+        XCTAssertEqual(state?.title, "Loading PR...")
+        XCTAssertEqual(state?.toolTip, "Loading pull request status.")
+        XCTAssertEqual(state?.accessibilityValue, "Loading pull request status")
+        XCTAssertNil(state?.url)
+        XCTAssertEqual(state?.tint, .tertiary)
+    }
+
+    func testPullRequestStateLoadingTakesPrecedenceOverStatus() {
+        let url = URL(string: "https://github.com/example/repo/pull/12")!
+        let status = GitHubPullRequestStatus.pullRequest(
+            GitHubPullRequestInfo(number: 12, url: url, lifecycleState: .open)
+        )
+
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: true)
+
+        XCTAssertEqual(state?.title, "Loading PR...")
+        XCTAssertNil(state?.url)
     }
 
     func testPullRequestStateForOpenPullRequest() {
@@ -214,12 +236,72 @@ final class EditorPaneHostModelsTests: XCTestCase {
             GitHubPullRequestInfo(number: 12, url: url, lifecycleState: .open)
         )
 
-        let state = GitHubPullRequestStatusBarState(status: status)
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
 
         XCTAssertEqual(state?.title, "#12")
         XCTAssertEqual(state?.toolTip, "View pull request #12, Open\n\(url.absoluteString)")
         XCTAssertEqual(state?.accessibilityValue, "Pull request #12, Open")
         XCTAssertEqual(state?.url, url)
+        XCTAssertEqual(state?.tint, .secondary)
+    }
+
+    func testPullRequestStateForConflictingPullRequest() {
+        let url = URL(string: "https://github.com/example/repo/pull/12")!
+        let status = GitHubPullRequestStatus.pullRequest(
+            GitHubPullRequestInfo(number: 12, url: url, lifecycleState: .open, mergeableState: .conflicting)
+        )
+
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
+
+        XCTAssertEqual(state?.title, "#12 Conflicts")
+        XCTAssertEqual(
+            state?.toolTip,
+            "View pull request #12, Open, Conflicts\nMerge conflicts with the base branch.\n\(url.absoluteString)"
+        )
+        XCTAssertEqual(state?.accessibilityValue, "Pull request #12, Open, Conflicts")
+        XCTAssertEqual(state?.tint, .red)
+    }
+
+    func testPullRequestStateForDraftConflictingPullRequest() {
+        let url = URL(string: "https://github.com/example/repo/pull/12")!
+        let status = GitHubPullRequestStatus.pullRequest(
+            GitHubPullRequestInfo(
+                number: 12,
+                url: url,
+                isDraft: true,
+                lifecycleState: .open,
+                mergeableState: .conflicting
+            )
+        )
+
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
+
+        XCTAssertEqual(state?.title, "#12 Draft Conflicts")
+        XCTAssertEqual(state?.tint, .red)
+    }
+
+    func testPullRequestStateForMergeablePullRequestKeepsSecondaryTint() {
+        let url = URL(string: "https://github.com/example/repo/pull/12")!
+        let status = GitHubPullRequestStatus.pullRequest(
+            GitHubPullRequestInfo(number: 12, url: url, lifecycleState: .open, mergeableState: .mergeable)
+        )
+
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
+
+        XCTAssertEqual(state?.title, "#12")
+        XCTAssertEqual(state?.tint, .secondary)
+    }
+
+    func testPullRequestStateDoesNotShowConflictsForClosedPullRequest() {
+        let url = URL(string: "https://github.com/example/repo/pull/12")!
+        let status = GitHubPullRequestStatus.pullRequest(
+            GitHubPullRequestInfo(number: 12, url: url, lifecycleState: .closed, mergeableState: .conflicting)
+        )
+
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
+
+        XCTAssertEqual(state?.title, "#12")
+        XCTAssertEqual(state?.tint, .secondary)
     }
 
     func testPullRequestStateForDraftPullRequest() {
@@ -228,7 +310,7 @@ final class EditorPaneHostModelsTests: XCTestCase {
             GitHubPullRequestInfo(number: 12, url: url, isDraft: true, lifecycleState: .open)
         )
 
-        let state = GitHubPullRequestStatusBarState(status: status)
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
 
         XCTAssertEqual(state?.title, "#12 Draft")
         XCTAssertEqual(state?.toolTip, "View pull request #12, Draft, Open\n\(url.absoluteString)")
@@ -242,12 +324,13 @@ final class EditorPaneHostModelsTests: XCTestCase {
             GitHubPullRequestCreationLink(baseBranch: "main", headBranch: "feature/login", url: url)
         )
 
-        let state = GitHubPullRequestStatusBarState(status: status)
+        let state = GitHubPullRequestStatusBarState(status: status, isLoading: false)
 
         XCTAssertEqual(state?.title, "Create PR")
         XCTAssertEqual(state?.toolTip, "Create pull request feature/login into main\n\(url.absoluteString)")
         XCTAssertEqual(state?.accessibilityValue, "Create pull request")
         XCTAssertEqual(state?.url, url)
+        XCTAssertEqual(state?.tint, .secondary)
     }
 
     // MARK: - GitStatusBarBranchState

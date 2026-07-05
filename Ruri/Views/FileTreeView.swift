@@ -23,6 +23,9 @@ struct FileTreeView: View {
     let createNode: (URL, String, Bool) -> Void
     let duplicateNode: (URL) -> Void
     let requestDelete: (FileNode) -> Void
+    let notifyCopied: (String) -> Void
+    let engageTreeFocus: () -> Void
+    let setTreeInlineEditing: (Bool) -> Void
 
     @FocusState private var isTreeFocused: Bool
     @FocusState private var focusedRenameURL: URL?
@@ -84,7 +87,8 @@ struct FileTreeView: View {
                                 commitCreate: commitCreate,
                                 cancelCreate: cancelCreate,
                                 duplicateNode: duplicateNode,
-                                requestDelete: requestDelete
+                                requestDelete: requestDelete,
+                                notifyCopied: notifyCopied
                             )
                         }
 
@@ -115,7 +119,8 @@ struct FileTreeView: View {
                                 commitCreate: commitCreate,
                                 cancelCreate: cancelCreate,
                                 duplicateNode: duplicateNode,
-                                requestDelete: requestDelete
+                                requestDelete: requestDelete,
+                                notifyCopied: notifyCopied
                             )
                         }
                     }
@@ -178,6 +183,17 @@ struct FileTreeView: View {
             guard oldValue, !newValue, isCreating else { return }
             commitCreate()
         }
+        .onChange(of: isTreeFocused) { _, isFocused in
+            if isFocused {
+                engageTreeFocus()
+            }
+        }
+        .onChange(of: focusedRenameURL) { _, _ in
+            notifyTreeInlineEditing()
+        }
+        .onChange(of: isCreateFieldFocused) { _, _ in
+            notifyTreeInlineEditing()
+        }
         .onChange(of: nodes) { _, newNodes in
             guard let creatingParentURL else { return }
 
@@ -209,6 +225,10 @@ struct FileTreeView: View {
     private func focusTree() {
         guard !isEditingInline else { return }
         isTreeFocused = true
+    }
+
+    private func notifyTreeInlineEditing() {
+        setTreeInlineEditing(focusedRenameURL != nil || isCreateFieldFocused)
     }
 
     private func beginCreate(_ node: FileNode, isDirectory: Bool) {
@@ -429,6 +449,7 @@ private struct FileTreeRow: View {
     let cancelCreate: () -> Void
     let duplicateNode: (URL) -> Void
     let requestDelete: (FileNode) -> Void
+    let notifyCopied: (String) -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -452,6 +473,7 @@ private struct FileTreeRow: View {
                 .contextMenu {
                     Button {
                         copyToPasteboard(FileTreePathFormatter.absolutePath(for: node.url))
+                        notifyCopied("Path copied.")
                     } label: {
                         Label(AppText.copyPathCommand, systemImage: "doc.on.doc")
                     }
@@ -459,6 +481,7 @@ private struct FileTreeRow: View {
                     if let relativePath = FileTreePathFormatter.relativePath(for: node.url, projectURL: projectURL) {
                         Button {
                             copyToPasteboard(relativePath)
+                            notifyCopied("Relative path copied.")
                         } label: {
                             Label(AppText.copyRelativePathCommand, systemImage: "doc.on.doc")
                         }
@@ -555,7 +578,8 @@ private struct FileTreeRow: View {
                             commitCreate: commitCreate,
                             cancelCreate: cancelCreate,
                             duplicateNode: duplicateNode,
-                            requestDelete: requestDelete
+                            requestDelete: requestDelete,
+                            notifyCopied: notifyCopied
                         )
                     }
 
@@ -586,7 +610,8 @@ private struct FileTreeRow: View {
                             commitCreate: commitCreate,
                             cancelCreate: cancelCreate,
                             duplicateNode: duplicateNode,
-                            requestDelete: requestDelete
+                            requestDelete: requestDelete,
+                            notifyCopied: notifyCopied
                         )
                     }
                 }
@@ -927,6 +952,9 @@ private enum IntelliJFileStatusColor {
         expandDirectory: { _ in },
         createNode: { _, _, _ in },
         duplicateNode: { _ in },
-        requestDelete: { _ in }
+        requestDelete: { _ in },
+        notifyCopied: { _ in },
+        engageTreeFocus: {},
+        setTreeInlineEditing: { _ in }
     )
 }

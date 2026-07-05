@@ -242,6 +242,243 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         XCTAssertEqual(height, 30)
     }
 
+    func testReviewDiffLayoutSkipsRemeasureForUnchangedSignature() {
+        let signature = ReviewDiffScrollLayout.MeasurementSignature(textWidth: 320, wrapLines: true)
+
+        XCTAssertFalse(ReviewDiffScrollLayout.needsRemeasure(
+            previous: signature,
+            candidate: signature,
+            forced: false
+        ))
+    }
+
+    func testReviewDiffLayoutRemeasuresWhenSignatureChangesOrForced() {
+        let signature = ReviewDiffScrollLayout.MeasurementSignature(textWidth: 320, wrapLines: true)
+
+        XCTAssertTrue(ReviewDiffScrollLayout.needsRemeasure(
+            previous: nil,
+            candidate: signature,
+            forced: false
+        ))
+        XCTAssertTrue(ReviewDiffScrollLayout.needsRemeasure(
+            previous: ReviewDiffScrollLayout.MeasurementSignature(textWidth: 480, wrapLines: true),
+            candidate: signature,
+            forced: false
+        ))
+        XCTAssertTrue(ReviewDiffScrollLayout.needsRemeasure(
+            previous: ReviewDiffScrollLayout.MeasurementSignature(textWidth: 320, wrapLines: false),
+            candidate: signature,
+            forced: false
+        ))
+        XCTAssertTrue(ReviewDiffScrollLayout.needsRemeasure(
+            previous: signature,
+            candidate: signature,
+            forced: true
+        ))
+    }
+
+    func testUnifiedLineCountMatchesBuiltDocument() {
+        let file = mixedRunsFile()
+
+        let document = ReviewDiffRenderedDocument.unified(
+            file: file,
+            oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
+            newFileURL: URL(filePath: "/tmp/repo/App.swift")
+        )
+
+        XCTAssertEqual(ReviewDiffRenderedDocument.unifiedLineCount(for: file), document.lineCount)
+    }
+
+    func testSideBySideLineCountMatchesBuiltDocuments() {
+        let file = mixedRunsFile()
+
+        let oldDocument = ReviewDiffRenderedDocument.sideBySide(
+            file: file,
+            side: .old,
+            fileURL: URL(filePath: "/tmp/repo/App.swift")
+        )
+        let newDocument = ReviewDiffRenderedDocument.sideBySide(
+            file: file,
+            side: .new,
+            fileURL: URL(filePath: "/tmp/repo/App.swift")
+        )
+
+        XCTAssertEqual(ReviewDiffRenderedDocument.sideBySideLineCount(for: file), oldDocument.lineCount)
+        XCTAssertEqual(ReviewDiffRenderedDocument.sideBySideLineCount(for: file), newDocument.lineCount)
+    }
+
+    func testUnifiedDocumentsChunkingPreservesContent() {
+        let file = mixedRunsFile()
+        let full = ReviewDiffRenderedDocument.unified(
+            file: file,
+            oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
+            newFileURL: URL(filePath: "/tmp/repo/App.swift")
+        )
+        let chunks = ReviewDiffRenderedDocument.unifiedDocuments(
+            for: file,
+            oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
+            newFileURL: URL(filePath: "/tmp/repo/App.swift"),
+            maxLinesPerDocument: 2
+        )
+
+        XCTAssertTrue(chunks.allSatisfy { $0.lineCount <= 2 })
+        XCTAssertEqual(chunks.reduce(0) { $0 + $1.lineCount }, full.lineCount)
+        XCTAssertEqual(chunks.flatMap { $0.lines.map(\.kind) }, full.lines.map(\.kind))
+        XCTAssertEqual(chunks.map(\.text).joined(separator: "\n"), full.text)
+        XCTAssertTrue(chunks.allSatisfy { $0.maximumCodeWidth <= full.maximumCodeWidth })
+    }
+
+    func testSideBySideDocumentsChunkBoundariesMatchAcrossSides() {
+        let file = mixedRunsFile()
+        let oldChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
+            for: file,
+            side: .old,
+            fileURL: URL(filePath: "/tmp/repo/App.swift"),
+            maxLinesPerDocument: 3
+        )
+        let newChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
+            for: file,
+            side: .new,
+            fileURL: URL(filePath: "/tmp/repo/App.swift"),
+            maxLinesPerDocument: 3
+        )
+
+        XCTAssertEqual(oldChunks.count, newChunks.count)
+        XCTAssertEqual(oldChunks.map(\.lineCount), newChunks.map(\.lineCount))
+        XCTAssertEqual(
+            oldChunks.reduce(0) { $0 + $1.lineCount },
+            ReviewDiffRenderedDocument.sideBySideLineCount(for: file)
+        )
+    }
+
+    func testEstimatedChunkedDocumentHeightMatchesPerChunkSum() {
+        let lineHeight: CGFloat = 18
+        let inset: CGFloat = 6
+        let perChunk: (Int) -> CGFloat = { lines in
+            ReviewDiffScrollLayout.estimatedDocumentHeight(
+                lineCount: lines,
+                lineHeight: lineHeight,
+                textInsetHeight: inset
+            )
+        }
+
+        XCTAssertEqual(
+            ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
+                totalLineCount: 10,
+                maxLinesPerDocument: 4,
+                lineHeight: lineHeight,
+                textInsetHeight: inset
+            ),
+            perChunk(4) + perChunk(4) + perChunk(2)
+        )
+        XCTAssertEqual(
+            ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
+                totalLineCount: 3,
+                maxLinesPerDocument: 256,
+                lineHeight: lineHeight,
+                textInsetHeight: inset
+            ),
+            perChunk(3)
+        )
+    }
+
+    func testIsNearViewportIncludesOneViewportMargin() {
+        let viewport = CGRect(x: 0, y: 0, width: 800, height: 600)
+
+        XCTAssertTrue(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: 100, width: 800, height: 200),
+            viewportBounds: viewport
+        ))
+        XCTAssertTrue(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: -700, width: 800, height: 200),
+            viewportBounds: viewport
+        ))
+        XCTAssertTrue(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: 1100, width: 800, height: 200),
+            viewportBounds: viewport
+        ))
+        XCTAssertFalse(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: -900, width: 800, height: 200),
+            viewportBounds: viewport
+        ))
+        XCTAssertFalse(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: 1300, width: 800, height: 200),
+            viewportBounds: viewport
+        ))
+    }
+
+    func testIsNearViewportDefaultsToVisibleWithoutViewportBounds() {
+        XCTAssertTrue(ReviewDiffScrollLayout.isNearViewport(
+            rowFrame: CGRect(x: 0, y: 10_000, width: 800, height: 200),
+            viewportBounds: nil
+        ))
+    }
+
+    private func mixedRunsFile() -> GitReviewFileDiff {
+        GitReviewFileDiff(diff: SourceFileDiff(
+            oldRelativePath: "App.swift",
+            newRelativePath: "App.swift",
+            hunks: [
+                SourceDiffHunk(
+                    oldStart: 1,
+                    oldLineCount: 4,
+                    newStart: 1,
+                    newLineCount: 3,
+                    lines: [
+                        SourceDiffLine(kind: .context, oldLineNumber: 1, newLineNumber: 1, content: "keep"),
+                        SourceDiffLine(kind: .deletion, oldLineNumber: 2, newLineNumber: nil, content: "old one"),
+                        SourceDiffLine(kind: .deletion, oldLineNumber: 3, newLineNumber: nil, content: "old two"),
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 2, content: "new one"),
+                        SourceDiffLine(kind: .context, oldLineNumber: 4, newLineNumber: 3, content: "after")
+                    ]
+                ),
+                SourceDiffHunk(
+                    oldStart: 10,
+                    oldLineCount: 1,
+                    newStart: 9,
+                    newLineCount: 3,
+                    lines: [
+                        SourceDiffLine(kind: .context, oldLineNumber: 10, newLineNumber: 9, content: "ctx"),
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 10, content: "add one"),
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 11, content: "add two")
+                    ]
+                )
+            ]
+        ))
+    }
+
+    func testReviewDiffExpansionPolicyCollapsesViewedFiles() {
+        XCTAssertFalse(ReviewDiffExpansionPolicy.initiallyExpanded(
+            isViewed: true,
+            lineCount: 10,
+            fileIndex: 0
+        ))
+    }
+
+    func testReviewDiffExpansionPolicyExpandsSmallUnviewedFiles() {
+        XCTAssertTrue(ReviewDiffExpansionPolicy.initiallyExpanded(
+            isViewed: false,
+            lineCount: ReviewDiffExpansionPolicy.largeDiffLineThreshold,
+            fileIndex: ReviewDiffExpansionPolicy.autoExpandFileLimit - 1
+        ))
+    }
+
+    func testReviewDiffExpansionPolicyCollapsesLargeDiffs() {
+        XCTAssertFalse(ReviewDiffExpansionPolicy.initiallyExpanded(
+            isViewed: false,
+            lineCount: ReviewDiffExpansionPolicy.largeDiffLineThreshold + 1,
+            fileIndex: 0
+        ))
+    }
+
+    func testReviewDiffExpansionPolicyCollapsesFilesBeyondAutoExpandLimit() {
+        XCTAssertFalse(ReviewDiffExpansionPolicy.initiallyExpanded(
+            isViewed: false,
+            lineCount: 10,
+            fileIndex: ReviewDiffExpansionPolicy.autoExpandFileLimit
+        ))
+    }
+
     func testReviewDiffScrollWheelForwardsVerticalGestureToParent() {
         let route = ReviewDiffScrollLayout.scrollWheelRoute(
             phase: .gestureBegan,

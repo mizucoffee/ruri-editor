@@ -47,7 +47,7 @@ nonisolated struct GitHubPullRequestService: GitHubPullRequestServiceProtocol, S
                 "view",
                 trimmedBranchName,
                 "--json",
-                "number,url,state,isDraft"
+                "number,url,state,isDraft,mergeable"
             ],
             currentDirectoryURL: openedRootURL.standardizedFileURL
         )
@@ -152,7 +152,8 @@ nonisolated struct GitHubPullRequestService: GitHubPullRequestServiceProtocol, S
             number: response.number,
             url: url,
             isDraft: response.isDraft ?? false,
-            lifecycleState: GitHubPullRequestLifecycleState(rawValue: response.state)
+            lifecycleState: GitHubPullRequestLifecycleState(rawValue: response.state),
+            mergeableState: GitHubPullRequestMergeableState(rawValue: response.mergeable ?? "")
         )
     }
 
@@ -231,6 +232,7 @@ private struct PullRequestResponse: Decodable {
     let url: String
     let state: String
     let isDraft: Bool?
+    let mergeable: String?
 }
 
 private struct PullRequestDetailsResponse: Decodable {

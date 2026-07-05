@@ -177,6 +177,9 @@ nonisolated struct GitReviewDiffUpdate: Equatable, Sendable {
 }
 
 nonisolated struct GitReviewFileDiff: Identifiable, Equatable, Sendable {
+    /// Sentinel fingerprint for deleted files, which have no content to hash.
+    static let deletedContentFingerprint = "deleted"
+
     let oldRelativePath: String?
     let newRelativePath: String?
     let status: GitFileDisplayStatus
@@ -184,6 +187,7 @@ nonisolated struct GitReviewFileDiff: Identifiable, Equatable, Sendable {
     let deletions: Int
     let isBinary: Bool
     let diff: SourceFileDiff
+    let contentFingerprint: String?
 
     init(
         oldRelativePath: String?,
@@ -192,7 +196,8 @@ nonisolated struct GitReviewFileDiff: Identifiable, Equatable, Sendable {
         additions: Int,
         deletions: Int,
         isBinary: Bool = false,
-        diff: SourceFileDiff
+        diff: SourceFileDiff,
+        contentFingerprint: String? = nil
     ) {
         self.oldRelativePath = oldRelativePath
         self.newRelativePath = newRelativePath
@@ -201,12 +206,14 @@ nonisolated struct GitReviewFileDiff: Identifiable, Equatable, Sendable {
         self.deletions = deletions
         self.isBinary = isBinary
         self.diff = diff
+        self.contentFingerprint = contentFingerprint
     }
 
     init(
         diff: SourceFileDiff,
         status: GitFileDisplayStatus? = nil,
-        isBinary: Bool = false
+        isBinary: Bool = false,
+        contentFingerprint: String? = nil
     ) {
         self.init(
             oldRelativePath: diff.oldRelativePath,
@@ -215,7 +222,21 @@ nonisolated struct GitReviewFileDiff: Identifiable, Equatable, Sendable {
             additions: diff.additionCount,
             deletions: diff.deletionCount,
             isBinary: isBinary,
-            diff: diff
+            diff: diff,
+            contentFingerprint: contentFingerprint
+        )
+    }
+
+    func withContentFingerprint(_ contentFingerprint: String?) -> GitReviewFileDiff {
+        GitReviewFileDiff(
+            oldRelativePath: oldRelativePath,
+            newRelativePath: newRelativePath,
+            status: status,
+            additions: additions,
+            deletions: deletions,
+            isBinary: isBinary,
+            diff: diff,
+            contentFingerprint: contentFingerprint
         )
     }
 

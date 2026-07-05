@@ -395,6 +395,83 @@ final class GitServiceTests: XCTestCase {
         })
     }
 
+    func testReviewDiffPopulatesContentFingerprints() async throws {
+        let parentURL = try makeTemporaryDirectory()
+        let rootURL = parentURL
+            .appending(path: "Project", directoryHint: .isDirectory)
+            .appending(path: "ruri-base", directoryHint: .isDirectory)
+        let worktreeURL = parentURL
+            .appending(path: "Project", directoryHint: .isDirectory)
+            .appending(path: "feature-viewed", directoryHint: .isDirectory)
+        defer { try? fileManager.removeItem(at: parentURL) }
+
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try initializeRepository(at: rootURL)
+        try "one\ntwo\n".write(to: rootURL.appending(path: "Committed.txt"), atomically: true, encoding: .utf8)
+        try "gone\n".write(to: rootURL.appending(path: "Deleted.txt"), atomically: true, encoding: .utf8)
+        try Data([0x00, 0x01, 0x02]).write(to: rootURL.appending(path: "Binary.bin"))
+        try runGit(["add", "Committed.txt", "Deleted.txt", "Binary.bin"], in: rootURL)
+        try runGit(["commit", "-m", "initial"], in: rootURL)
+        try runGit(["worktree", "add", "-b", "feature/viewed", worktreeURL.path(percentEncoded: false)], in: rootURL)
+
+        try "one\ntwo feature\n".write(to: worktreeURL.appending(path: "Committed.txt"), atomically: true, encoding: .utf8)
+        try runGit(["commit", "-am", "feature commit"], in: worktreeURL)
+        try fileManager.removeItem(at: worktreeURL.appending(path: "Deleted.txt"))
+        try Data([0x00, 0x01, 0x02, 0x03]).write(to: worktreeURL.appending(path: "Binary.bin"))
+        try "new\nfile\n".write(to: worktreeURL.appending(path: "Untracked.txt"), atomically: true, encoding: .utf8)
+
+        let snapshot = try await GitService().reviewDiff(baseBranch: "main", openedRootURL: worktreeURL)
+
+        func fingerprint(_ path: String) -> String? {
+            snapshot.files.first { $0.displayRelativePath == path }?.contentFingerprint
+        }
+        func hashObject(_ path: String) throws -> String {
+            try runGit(["hash-object", "--", path], in: worktreeURL)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        XCTAssertEqual(fingerprint("Committed.txt"), try hashObject("Committed.txt"))
+        XCTAssertEqual(fingerprint("Binary.bin"), try hashObject("Binary.bin"))
+        XCTAssertEqual(fingerprint("Untracked.txt"), try hashObject("Untracked.txt"))
+        XCTAssertEqual(fingerprint("Deleted.txt"), GitReviewFileDiff.deletedContentFingerprint)
+
+        let stableSnapshot = try await GitService().reviewDiff(baseBranch: "main", openedRootURL: worktreeURL)
+        XCTAssertEqual(
+            stableSnapshot.files.map(\.contentFingerprint),
+            snapshot.files.map(\.contentFingerprint)
+        )
+
+        try "new\nfile edited\n".write(to: worktreeURL.appending(path: "Untracked.txt"), atomically: true, encoding: .utf8)
+        let changedSnapshot = try await GitService().reviewDiff(baseBranch: "main", openedRootURL: worktreeURL)
+        let changedFingerprint = changedSnapshot.files.first { $0.displayRelativePath == "Untracked.txt" }?.contentFingerprint
+        XCTAssertNotNil(changedFingerprint)
+        XCTAssertNotEqual(changedFingerprint, fingerprint("Untracked.txt"))
+    }
+
+    func testReviewDiffUpdatePopulatesContentFingerprints() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try initializeRepository(at: rootURL)
+        let fileURL = rootURL.appending(path: "First.txt")
+        try "one\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        try runGit(["add", "First.txt"], in: rootURL)
+        try runGit(["commit", "-m", "base"], in: rootURL)
+
+        try "one changed\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let update = try await GitService().reviewDiffUpdate(
+            base: .uncommitted,
+            options: .default,
+            fileURLs: [fileURL],
+            openedRootURL: rootURL
+        )
+
+        let expectedHash = try runGit(["hash-object", "--", "First.txt"], in: rootURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(update.files.first?.contentFingerprint, expectedHash)
+    }
+
     func testReviewDiffCanHideWhitespaceOnlyChanges() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }

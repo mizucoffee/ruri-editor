@@ -14,6 +14,7 @@ struct EditorPaneHostView: NSViewControllerRepresentable {
     @Binding var reviewDiffDisplayMode: ReviewDiffDisplayMode
     @Binding var reviewDiffWrapLines: Bool
     let runtimeStore: EditorRuntimeStore
+    let paneFocus: PaneFocusStore
     let terminalState: TerminalPaneHostState
     let terminalActions: TerminalPaneHostActions
 
@@ -22,6 +23,7 @@ struct EditorPaneHostView: NSViewControllerRepresentable {
     }
 
     func updateNSViewController(_ viewController: EditorPaneViewController, context: Context) {
+        viewController.registerPaneFocusIfNeeded(paneFocus)
         viewController.update(
             state: state,
             actions: actions,
@@ -62,7 +64,9 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     private let editorStatusBarView = EditorStatusBarAppKitView()
     private let emptyView = EditorEmptyAppKitView()
     private let terminalPanelView = TerminalPanelAppKitView()
+    private let editorFocusLineView = FocusAccentLineView()
     private var reviewDiffHostingView: NSHostingView<ReviewDiffView>?
+    private weak var registeredPaneFocus: PaneFocusStore?
 
     private var workspaceID: ProjectWorkspaceSnapshot.ID?
     private var editorMode = EditorMode.edit
@@ -72,6 +76,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     private var isLoadingReviewDiffRemoteBranches = false
     private var reviewDiffRemoteBranchErrorMessage: String?
     private var reviewDiffHideWhitespace = false
+    private var reviewDiffViewedFilePaths: Set<String> = []
+    private var reviewDiffViewedSyncsToPullRequest = false
     private var reviewDiffDisplayMode: Binding<ReviewDiffDisplayMode>?
     private var reviewDiffWrapLines: Binding<Bool>?
     private var tabs: [EditorTabSnapshot] = []
@@ -86,6 +92,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     private var gitSnapshot: GitRepositorySnapshot?
     private var githubAuthStatus = GitHubAuthStatusState.checking
     private var githubPullRequestStatus: GitHubPullRequestStatus?
+    private var isGithubPullRequestLoading = false
     private var tabInputSetting = EditorTabInputSetting.defaultValue
     private var lineWrappingMode = EditorLineWrappingMode.defaultValue
     private var isTerminalMinimized = false
@@ -112,6 +119,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
     private var loadReviewDiffRemoteBranches: ((Bool) -> Void)?
     private var refreshReviewDiff: (() -> Void)?
     private var setReviewDiffHideWhitespace: ((Bool) -> Void)?
+    private var setReviewDiffFileViewed: ((String, Bool) -> Void)?
     private var openReviewDiffFile: ((URL) -> Void)?
     private var closeTab: ((EditorTab.ID) -> Void)?
     private var moveTab: ((EditorTab.ID, EditorTab.ID) -> Void)?
@@ -176,6 +184,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         stackView.addArrangedSubview(findSeparator)
         stackView.addArrangedSubview(bodyContainerView)
 
+        editorContainerView.addSubview(editorFocusLineView)
+
         findBarView.isHidden = true
         findSeparator.isHidden = true
 
@@ -204,6 +214,11 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             findSeparator.heightAnchor.constraint(equalToConstant: 1),
 
             bodyContainerView.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+
+            editorFocusLineView.leadingAnchor.constraint(equalTo: editorContainerView.leadingAnchor),
+            editorFocusLineView.trailingAnchor.constraint(equalTo: editorContainerView.trailingAnchor),
+            editorFocusLineView.topAnchor.constraint(equalTo: bodyContainerView.topAnchor),
+            editorFocusLineView.heightAnchor.constraint(equalToConstant: EditorMetrics.focusLineHeight),
 
             editorStatusSeparator.widthAnchor.constraint(equalTo: rootStack.widthAnchor),
             editorStatusSeparator.heightAnchor.constraint(equalToConstant: 1),
@@ -241,6 +256,8 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         self.isLoadingReviewDiffRemoteBranches = state.isLoadingReviewDiffRemoteBranches
         self.reviewDiffRemoteBranchErrorMessage = state.reviewDiffRemoteBranchErrorMessage
         self.reviewDiffHideWhitespace = state.reviewDiffHideWhitespace
+        self.reviewDiffViewedFilePaths = state.reviewDiffViewedFilePaths
+        self.reviewDiffViewedSyncsToPullRequest = state.reviewDiffViewedSyncsToPullRequest
         self.reviewDiffDisplayMode = reviewDiffDisplayMode
         self.reviewDiffWrapLines = reviewDiffWrapLines
         self.tabs = state.tabs
@@ -251,6 +268,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         self.gitSnapshot = state.gitSnapshot
         self.githubAuthStatus = state.githubAuthStatus
         self.githubPullRequestStatus = state.githubPullRequestStatus
+        self.isGithubPullRequestLoading = state.isGithubPullRequestLoading
         self.tabInputSetting = state.tabInputSetting
         self.lineWrappingMode = state.lineWrappingMode
         self.isTerminalMinimized = terminalState.isMinimized
@@ -277,6 +295,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         self.loadReviewDiffRemoteBranches = actions.loadReviewDiffRemoteBranches
         self.refreshReviewDiff = actions.refreshReviewDiff
         self.setReviewDiffHideWhitespace = actions.setReviewDiffHideWhitespace
+        self.setReviewDiffFileViewed = actions.setReviewDiffFileViewed
         self.openReviewDiffFile = actions.openReviewDiffFile
         self.closeTab = actions.closeTab
         self.moveTab = actions.moveTab
@@ -284,11 +303,15 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
 
         setTerminalPanelVisible(!terminalState.isMinimized)
         updateTabBar()
+        editorFocusLineView.setVisible(
+            state.editorMode == .edit && state.visibleFocusedPane == .editor
+        )
         updateTerminalPanel(
             workspaceURL: terminalState.workspaceURL,
             tabs: terminalState.tabs,
             selectedTabID: terminalState.selectedTabID,
             terminalFocusRequest: terminalState.focusRequest,
+            isFocused: state.visibleFocusedPane == .terminal,
             terminalView: terminalActions.terminalView,
             createTab: terminalActions.createTab,
             selectTab: terminalActions.selectTab,
@@ -304,6 +327,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             updateFindBar(for: nil)
             setEditorChromeVisibility(hasOpenTab: false)
             showReviewDiff(
+                showsFocusLine: state.visibleFocusedPane == .reviewDiff,
                 state: state.reviewDiffState,
                 selectedBase: state.reviewDiffBase,
                 localBranches: state.gitSnapshot?.localBranches ?? [],
@@ -311,12 +335,15 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
                 isLoadingRemoteBranches: state.isLoadingReviewDiffRemoteBranches,
                 remoteBranchErrorMessage: state.reviewDiffRemoteBranchErrorMessage,
                 hideWhitespace: state.reviewDiffHideWhitespace,
+                viewedFilePaths: state.reviewDiffViewedFilePaths,
+                viewedStateSyncsToPullRequest: state.reviewDiffViewedSyncsToPullRequest,
                 displayMode: reviewDiffDisplayMode,
                 wrapLines: reviewDiffWrapLines,
                 selectBase: actions.selectReviewDiffBase,
                 loadRemoteBranches: actions.loadReviewDiffRemoteBranches,
                 refresh: actions.refreshReviewDiff,
                 setHideWhitespace: actions.setReviewDiffHideWhitespace,
+                setFileViewed: actions.setReviewDiffFileViewed,
                 openFile: actions.openReviewDiffFile,
                 requestCodeNavigation: actions.requestReviewDiffCodeNavigation,
                 codeNavigationHoverRange: actions.reviewDiffCodeNavigationHoverRange
@@ -594,6 +621,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         tabs: [TerminalTabSnapshot],
         selectedTabID: TerminalTab.ID?,
         terminalFocusRequest: TerminalFocusRequest?,
+        isFocused: Bool,
         terminalView: (TerminalTab.ID) -> NSView?,
         createTab: @escaping () -> Void,
         selectTab: @escaping (TerminalTab.ID) -> Void,
@@ -606,6 +634,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             tabs: tabs,
             selectedTabID: selectedTabID,
             selectedTerminalView: selectedTerminalView,
+            isFocused: isFocused,
             createTab: createTab,
             selectTab: selectTab,
             closeTab: closeTab
@@ -683,7 +712,20 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         }
     }
 
+    func registerPaneFocusIfNeeded(_ store: PaneFocusStore) {
+        guard registeredPaneFocus !== store else { return }
+
+        registeredPaneFocus = store
+        store.registerEditorPane(
+            container: editorContainerView,
+            terminalPanel: terminalPanelView,
+            reviewDiffHostView: { [weak self] in self?.reviewDiffHostingView },
+            editorMode: { [weak self] in self?.editorMode ?? .edit }
+        )
+    }
+
     private func showReviewDiff(
+        showsFocusLine: Bool,
         state: ReviewDiffState,
         selectedBase: GitReviewDiffBase?,
         localBranches: [GitLocalBranchInfo],
@@ -691,12 +733,15 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         isLoadingRemoteBranches: Bool,
         remoteBranchErrorMessage: String?,
         hideWhitespace: Bool,
+        viewedFilePaths: Set<String>,
+        viewedStateSyncsToPullRequest: Bool,
         displayMode: Binding<ReviewDiffDisplayMode>,
         wrapLines: Binding<Bool>,
         selectBase: ((GitReviewDiffBase) -> Void)?,
         loadRemoteBranches: ((Bool) -> Void)?,
         refresh: @escaping () -> Void,
         setHideWhitespace: ((Bool) -> Void)?,
+        setFileViewed: ((String, Bool) -> Void)?,
         openFile: ((URL) -> Void)?,
         requestCodeNavigation: @escaping (ReviewDiffCodeNavigationRequest) -> Void,
         codeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?
@@ -708,6 +753,7 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
         }
 
         let rootView = ReviewDiffView(
+            showsFocusLine: showsFocusLine,
             state: state,
             selectedBase: selectedBase,
             localBranches: localBranches,
@@ -715,12 +761,15 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             isLoadingRemoteBranches: isLoadingRemoteBranches,
             remoteBranchErrorMessage: remoteBranchErrorMessage,
             hideWhitespace: hideWhitespace,
+            viewedFilePaths: viewedFilePaths,
+            viewedStateSyncsToPullRequest: viewedStateSyncsToPullRequest,
             displayMode: displayMode,
             wrapLines: wrapLines,
             selectBase: { selectBase?($0) },
             loadRemoteBranches: { loadRemoteBranches?($0) },
             refresh: refresh,
             setHideWhitespace: { setHideWhitespace?($0) },
+            setFileViewed: { setFileViewed?($0, $1) },
             openFile: { openFile?($0) },
             requestCodeNavigation: requestCodeNavigation,
             codeNavigationHoverRange: codeNavigationHoverRange
@@ -786,7 +835,10 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
                 fileSearchIndexStatus: fileSearchIndexStatus,
                 gitStatus: GitStatusBarState(status: gitRepositoryStatus),
                 githubStatus: GitHubStatusBarState(status: githubAuthStatus),
-                githubPullRequestStatus: GitHubPullRequestStatusBarState(status: githubPullRequestStatus),
+                githubPullRequestStatus: GitHubPullRequestStatusBarState(
+                    status: githubPullRequestStatus,
+                    isLoading: isGithubPullRequestLoading
+                ),
                 terminalStatus: terminalStatus,
                 selectLanguage: { _ in },
                 selectTabInputSetting: { _ in },
@@ -817,7 +869,10 @@ final class EditorPaneViewController: NSViewController, EditorDocumentRuntimeDel
             fileSearchIndexStatus: fileSearchIndexStatus,
             gitStatus: GitStatusBarState(status: gitRepositoryStatus),
             githubStatus: GitHubStatusBarState(status: githubAuthStatus),
-            githubPullRequestStatus: GitHubPullRequestStatusBarState(status: githubPullRequestStatus),
+            githubPullRequestStatus: GitHubPullRequestStatusBarState(
+                status: githubPullRequestStatus,
+                isLoading: isGithubPullRequestLoading
+            ),
             terminalStatus: terminalStatus,
             selectLanguage: { [weak self, weak runtime] languageName in
                 guard let self,
@@ -1362,6 +1417,7 @@ private final class EditorTabBarView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.verticalScrollElasticity = .none
 
         contentView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1933,10 +1989,10 @@ private final class EditorStatusBarAppKitView: NSView {
         }
 
         pullRequestButton.isHidden = false
-        pullRequestButton.isEnabled = true
+        pullRequestButton.isEnabled = githubPullRequestStatus.url != nil
         pullRequestButton.title = githubPullRequestStatus.title
         pullRequestButton.toolTip = githubPullRequestStatus.toolTip
-        pullRequestButton.contentTintColor = .secondaryLabelColor
+        pullRequestButton.contentTintColor = color(for: githubPullRequestStatus.tint)
         pullRequestButton.setAccessibilityValue(githubPullRequestStatus.accessibilityValue)
     }
 

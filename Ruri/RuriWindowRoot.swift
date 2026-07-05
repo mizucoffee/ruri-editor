@@ -17,6 +17,7 @@ struct RuriWindowRoot: View {
     @StateObject private var tabInputSettings = EditorTabInputSettingsStore()
     @StateObject private var lineWrappingSettings = EditorLineWrappingSettingsStore()
     @StateObject private var githubAuth = GitHubAuthViewModel()
+    @StateObject private var paneFocus = PaneFocusStore()
     @State private var isImporterPresented = false
     @State private var isWorktreeOverviewVisible = true
     @State private var isRunConfigurationSheetPresented = false
@@ -32,6 +33,7 @@ struct RuriWindowRoot: View {
             tabInputSettings: tabInputSettings,
             lineWrappingSettings: lineWrappingSettings,
             githubAuth: githubAuth,
+            paneFocus: paneFocus,
             isImporterPresented: $isImporterPresented,
             isWorktreeOverviewVisible: $isWorktreeOverviewVisible,
             openProjectInNewWindow: { url in
@@ -41,6 +43,7 @@ struct RuriWindowRoot: View {
         .navigationTitle(editor.projectName ?? "Ruri")
         .background {
             WindowAccessor { window in
+                paneFocus.attach(window: window)
                 ExternalGitHubPullRequestURLRouter.shared.register(editor, window: window)
                 CodingAgentNotificationRouter.shared.register(
                     editor: editor,

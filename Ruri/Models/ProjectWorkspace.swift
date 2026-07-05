@@ -50,6 +50,8 @@ struct ProjectWorkspace: Identifiable {
     var githubPullRequestStatus: GitHubPullRequestStatus?
     var githubPullRequestLookupKey: GitHubPullRequestLookupKey?
     var githubPullRequestRefreshRequestID: UUID?
+    /// 取得中も現在の表示を保持するサイレント更新(定期ポーリング)かどうか。
+    var isGitHubPullRequestRefreshSilent = false
     var isRefreshingFileSystem = false
     var hasPendingFileSystemRefresh = false
     var pendingFileSystemChange: ProjectFileWatcher.Change?

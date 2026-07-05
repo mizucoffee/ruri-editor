@@ -236,6 +236,75 @@ final class TerminalViewModelCodingAgentNotificationTests: XCTestCase {
         }
     }
 
+    func testRemovesDeliveredNotificationOnVisibleTerminalUserInteraction() async throws {
+        let store = FakeCodingAgentStatusStore()
+        let notifier = RecordingCodingAgentStatusNotifier()
+        let state = makeTerminalState(store: store, notifier: notifier, isApplicationActive: { true })
+        let rootURL = URL(filePath: "/tmp/Project")
+        let statusDirectoryURL = rootURL.appending(path: ".ruri/agent-status", directoryHint: .isDirectory)
+
+        state.updateActiveWorkspace(
+            id: rootURL,
+            rootURL: rootURL,
+            agentStatusDirectoryURL: statusDirectoryURL
+        )
+        let terminalID = try XCTUnwrap(state.tabs.first?.id)
+        store.statusesByDirectoryURL = [
+            statusDirectoryURL: [
+                terminalID: makeStatus(
+                    terminalID: terminalID,
+                    state: .waiting,
+                    event: "PermissionRequest"
+                )
+            ]
+        ]
+
+        await state.refreshAgentStatuses()
+        try await waitForNotificationCount(notifier, 1)
+        XCTAssertTrue(notifier.removedTerminalIDBatches.isEmpty)
+
+        state.markTerminalSeenByUserInteraction(terminalID)
+
+        try await TestSupport.waitUntil("delivered notification removal") {
+            notifier.removedTerminalIDBatches.contains([terminalID])
+        }
+    }
+
+    func testDoesNotRemoveDeliveredNotificationOnHiddenTerminalUserInteraction() async throws {
+        let store = FakeCodingAgentStatusStore()
+        let notifier = RecordingCodingAgentStatusNotifier()
+        let state = makeTerminalState(store: store, notifier: notifier, isApplicationActive: { true })
+        let rootURL = URL(filePath: "/tmp/Project")
+        let statusDirectoryURL = rootURL.appending(path: ".ruri/agent-status", directoryHint: .isDirectory)
+
+        state.updateActiveWorkspace(
+            id: rootURL,
+            rootURL: rootURL,
+            agentStatusDirectoryURL: statusDirectoryURL
+        )
+        let firstTerminalID = try XCTUnwrap(state.tabs.first?.id)
+        state.createTab()
+        XCTAssertNotEqual(state.selectedTabID, firstTerminalID)
+        store.statusesByDirectoryURL = [
+            statusDirectoryURL: [
+                firstTerminalID: makeStatus(
+                    terminalID: firstTerminalID,
+                    state: .waiting,
+                    event: "PermissionRequest"
+                )
+            ]
+        ]
+
+        await state.refreshAgentStatuses()
+        try await waitForNotificationCount(notifier, 1)
+
+        // 選択中でないターミナルへの操作扱いでは取り下げない。
+        state.markTerminalSeenByUserInteraction(firstTerminalID)
+
+        try await waitForNotificationQuiescence()
+        XCTAssertTrue(notifier.removedTerminalIDBatches.isEmpty)
+    }
+
     func testRemovesDeliveredNotificationOnApplicationActivation() async throws {
         let store = FakeCodingAgentStatusStore()
         let notifier = RecordingCodingAgentStatusNotifier()

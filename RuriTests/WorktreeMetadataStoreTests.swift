@@ -121,6 +121,176 @@ final class WorktreeMetadataStoreTests: XCTestCase {
         XCTAssertEqual(recoveredMemo, "Recovered")
     }
 
+    func testMissingMetadataReturnsEmptyViewedReviewFiles() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let viewedFiles = await WorktreeMetadataStore().viewedReviewFiles(
+            forBranch: "feature/missing",
+            metadataDirectoryURL: rootURL.appending(path: ".ruri")
+        )
+
+        XCTAssertEqual(viewedFiles, [:])
+    }
+
+    func testSavesAndLoadsViewedReviewFiles() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let metadataURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+
+        try await store.saveViewedReviewFile(
+            path: "Sources/App.swift",
+            fingerprint: "abc123",
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+        try await store.saveViewedReviewFile(
+            path: "Sources/Other.swift",
+            fingerprint: "def456",
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+
+        let viewedFiles = await store.viewedReviewFiles(
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL
+        )
+
+        XCTAssertEqual(viewedFiles, [
+            "Sources/App.swift": "abc123",
+            "Sources/Other.swift": "def456"
+        ])
+    }
+
+    func testNilFingerprintRemovesViewedReviewFile() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let metadataURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+
+        try await store.saveViewedReviewFile(
+            path: "Sources/App.swift",
+            fingerprint: "abc123",
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+        try await store.saveViewedReviewFile(
+            path: "Sources/App.swift",
+            fingerprint: nil,
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+
+        let viewedFiles = await store.viewedReviewFiles(
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL
+        )
+
+        XCTAssertEqual(viewedFiles, [:])
+    }
+
+    func testViewedReviewFilesAreScopedPerBranchAndPreserveOtherMetadata() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let metadataURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+
+        try await store.saveMemo(
+            "Review authentication",
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+        try await store.saveReviewBase(
+            .branch("main"),
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+        try await store.saveViewedReviewFile(
+            path: "Sources/App.swift",
+            fingerprint: "abc123",
+            forBranch: "feature/auth",
+            metadataDirectoryURL: metadataURL,
+            repositoryRootURL: nil
+        )
+
+        let viewedFiles = await store.viewedReviewFiles(forBranch: "feature/auth", metadataDirectoryURL: metadataURL)
+        let otherBranchViewedFiles = await store.viewedReviewFiles(forBranch: "main", metadataDirectoryURL: metadataURL)
+        let memo = await store.memo(forBranch: "feature/auth", metadataDirectoryURL: metadataURL)
+        let reviewBase = await store.reviewBase(forBranch: "feature/auth", metadataDirectoryURL: metadataURL)
+
+        XCTAssertEqual(viewedFiles, ["Sources/App.swift": "abc123"])
+        XCTAssertEqual(otherBranchViewedFiles, [:])
+        XCTAssertEqual(memo, "Review authentication")
+        XCTAssertEqual(reviewBase, .branch("main"))
+    }
+
+    func testDocumentWithoutViewedReviewFilesStillDecodes() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let metadataURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: metadataURL, withIntermediateDirectories: true)
+        try """
+        {"version":1,"branches":{"feature/auth":{"memo":"Legacy"}}}
+        """.write(to: metadataURL.appending(path: "worktree-metadata.json"), atomically: true, encoding: .utf8)
+
+        let store = WorktreeMetadataStore()
+        let viewedFiles = await store.viewedReviewFiles(forBranch: "feature/auth", metadataDirectoryURL: metadataURL)
+        let memo = await store.memo(forBranch: "feature/auth", metadataDirectoryURL: metadataURL)
+
+        XCTAssertEqual(viewedFiles, [:])
+        XCTAssertEqual(memo, "Legacy")
+    }
+
+    func testConcurrentSavesAcrossKindsDoNotLoseUpdates() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let metadataURL = rootURL.appending(path: ".ruri", directoryHint: .isDirectory)
+        let store = WorktreeMetadataStore()
+
+        for index in 0..<10 {
+            async let memoSave: Void = store.saveMemo(
+                "memo-\(index)",
+                forBranch: "main",
+                metadataDirectoryURL: metadataURL,
+                repositoryRootURL: nil
+            )
+            async let viewedSave: Void = store.saveViewedReviewFile(
+                path: "File-\(index).txt",
+                fingerprint: "fp-\(index)",
+                forBranch: "main",
+                metadataDirectoryURL: metadataURL,
+                repositoryRootURL: nil
+            )
+            async let baseSave: Void = store.saveReviewBase(
+                .branch("base-\(index)"),
+                forBranch: "main",
+                metadataDirectoryURL: metadataURL,
+                repositoryRootURL: nil
+            )
+            _ = try await (memoSave, viewedSave, baseSave)
+        }
+
+        let viewedFiles = await store.viewedReviewFiles(forBranch: "main", metadataDirectoryURL: metadataURL)
+        let memo = await store.memo(forBranch: "main", metadataDirectoryURL: metadataURL)
+        let reviewBase = await store.reviewBase(forBranch: "main", metadataDirectoryURL: metadataURL)
+
+        XCTAssertEqual(viewedFiles.count, 10)
+        XCTAssertEqual(memo, "memo-9")
+        XCTAssertEqual(reviewBase, .branch("base-9"))
+    }
+
     func testSaveAddsRuriToLocalGitExcludeForRepoRootMetadata() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }

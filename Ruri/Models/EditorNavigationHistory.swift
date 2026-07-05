@@ -6,7 +6,7 @@
 import CoreGraphics
 import Foundation
 
-struct EditorNavigationPlace: Equatable {
+struct EditorDocumentPlace: Equatable {
     let url: URL
     let selectedRange: NSRange
     let scrollOrigin: CGPoint
@@ -21,16 +21,16 @@ struct EditorNavigationPlace: Equatable {
         self.scrollOrigin = scrollOrigin
     }
 
-    func hasSamePosition(as other: EditorNavigationPlace) -> Bool {
+    func hasSamePosition(as other: EditorDocumentPlace) -> Bool {
         FileURLRewriter.urlsMatch(url, other.url)
             && NSEqualRanges(selectedRange, other.selectedRange)
     }
 
-    static func == (lhs: EditorNavigationPlace, rhs: EditorNavigationPlace) -> Bool {
+    static func == (lhs: EditorDocumentPlace, rhs: EditorDocumentPlace) -> Bool {
         lhs.hasSamePosition(as: rhs) && lhs.scrollOrigin == rhs.scrollOrigin
     }
 
-    func rewritten(replacing oldURL: URL, with newURL: URL) -> EditorNavigationPlace {
+    func rewritten(replacing oldURL: URL, with newURL: URL) -> EditorDocumentPlace {
         guard let rewrittenURL = FileURLRewriter.rewrittenURL(
             url,
             replacing: oldURL,
@@ -39,11 +39,36 @@ struct EditorNavigationPlace: Equatable {
             return self
         }
 
-        return EditorNavigationPlace(
+        return EditorDocumentPlace(
             url: rewrittenURL,
             selectedRange: selectedRange,
             scrollOrigin: scrollOrigin
         )
+    }
+}
+
+enum EditorNavigationPlace: Equatable {
+    case editor(EditorDocumentPlace)
+    case review
+
+    func hasSamePosition(as other: EditorNavigationPlace) -> Bool {
+        switch (self, other) {
+        case (.editor(let lhs), .editor(let rhs)):
+            return lhs.hasSamePosition(as: rhs)
+        case (.review, .review):
+            return true
+        default:
+            return false
+        }
+    }
+
+    func rewritten(replacing oldURL: URL, with newURL: URL) -> EditorNavigationPlace {
+        switch self {
+        case .editor(let place):
+            return .editor(place.rewritten(replacing: oldURL, with: newURL))
+        case .review:
+            return self
+        }
     }
 }
 

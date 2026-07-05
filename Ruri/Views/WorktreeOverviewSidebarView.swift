@@ -12,6 +12,7 @@ struct WorktreeOverviewSidebarView: View {
     let memos: [ProjectWorkspaceSnapshot.ID: String]
     let pullRequestStatuses: [ProjectWorkspaceSnapshot.ID: GitHubPullRequestStatus]
     let pullRequestLoadingWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>
+    let pullingWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>
     let activeWorkspaceID: ProjectWorkspaceSnapshot.ID?
     let selectedTerminalTabID: TerminalTab.ID?
     let deletableWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID>
@@ -23,6 +24,7 @@ struct WorktreeOverviewSidebarView: View {
     let deleteWorktree: (ProjectWorkspaceSnapshot.ID) -> Void
     let pullWorktree: (ProjectWorkspaceSnapshot.ID) -> Void
     let openPullRequest: (URL) -> Void
+    let notifyCopied: (String) -> Void
 
     private var items: [WorktreeOverviewItem] {
         WorktreeOverviewBuilder.items(
@@ -32,6 +34,7 @@ struct WorktreeOverviewSidebarView: View {
             memos: memos,
             pullRequestStatuses: pullRequestStatuses,
             pullRequestLoadingWorkspaceIDs: pullRequestLoadingWorkspaceIDs,
+            pullingWorkspaceIDs: pullingWorkspaceIDs,
             activeWorkspaceID: activeWorkspaceID,
             selectedTerminalTabID: selectedTerminalTabID,
             deletableWorkspaceIDs: deletableWorkspaceIDs
@@ -108,7 +111,8 @@ struct WorktreeOverviewSidebarView: View {
                 },
                 selectTerminal: { terminalID in
                     selectTerminal(item.id, terminalID)
-                }
+                },
+                notifyCopied: notifyCopied
             )
         } else {
             LinkedWorktreeOverviewCard(
@@ -127,7 +131,8 @@ struct WorktreeOverviewSidebarView: View {
                 openPullRequest: openPullRequest,
                 selectTerminal: { terminalID in
                     selectTerminal(item.id, terminalID)
-                }
+                },
+                notifyCopied: notifyCopied
             )
         }
     }

@@ -16,4 +16,5 @@ enum EditorMetrics {
     static let terminalMinimumHeight: CGFloat = 120
     static let terminalHeaderHeight: CGFloat = 32
     static let terminalTabMaxTitleWidth: CGFloat = 140
+    static let focusLineHeight: CGFloat = 2
 }

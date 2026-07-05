@@ -13,6 +13,7 @@ final class TerminalPanelAppKitView: NSView {
     private let separator = NSBox()
     private let bodyContainerView = NSView()
     private let emptyView = TerminalEmptyAppKitView()
+    private let focusLineView = FocusAccentLineView()
 
     private var createTab: (() -> Void)?
 
@@ -31,6 +32,7 @@ final class TerminalPanelAppKitView: NSView {
         tabs: [TerminalTabSnapshot],
         selectedTabID: TerminalTab.ID?,
         selectedTerminalView: NSView?,
+        isFocused: Bool,
         createTab: @escaping () -> Void,
         selectTab: @escaping (TerminalTab.ID) -> Void,
         closeTab: @escaping (TerminalTab.ID) -> Void
@@ -38,6 +40,7 @@ final class TerminalPanelAppKitView: NSView {
         self.createTab = createTab
 
         newTabButton.isEnabled = workspaceURL != nil
+        focusLineView.setVisible(isFocused)
 
         tabBarView.update(
             tabs: tabs,
@@ -86,6 +89,8 @@ final class TerminalPanelAppKitView: NSView {
         stackView.addArrangedSubview(separator)
         stackView.addArrangedSubview(bodyContainerView)
 
+        addSubview(focusLineView)
+
         NSLayoutConstraint.activate([
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -98,7 +103,12 @@ final class TerminalPanelAppKitView: NSView {
             separator.widthAnchor.constraint(equalTo: stackView.widthAnchor),
             separator.heightAnchor.constraint(equalToConstant: 1),
 
-            bodyContainerView.widthAnchor.constraint(equalTo: stackView.widthAnchor)
+            bodyContainerView.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+
+            focusLineView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            focusLineView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            focusLineView.topAnchor.constraint(equalTo: bodyContainerView.topAnchor),
+            focusLineView.heightAnchor.constraint(equalToConstant: EditorMetrics.focusLineHeight)
         ])
     }
 
@@ -219,6 +229,7 @@ private final class TerminalTabBarAppKitView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.verticalScrollElasticity = .none
 
         contentView.translatesAutoresizingMaskIntoConstraints = false
 

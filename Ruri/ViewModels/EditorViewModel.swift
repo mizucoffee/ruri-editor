@@ -3,6 +3,7 @@
 //  ruri
 //
 
+import AppKit
 import Combine
 import Foundation
 
@@ -79,9 +80,11 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var gitBranchesByProjectID: [ProjectWorkspaceSnapshot.ID: GitBranchState] = [:]
     @Published private(set) var githubPullRequestStatusesByProjectID: [ProjectWorkspaceSnapshot.ID: GitHubPullRequestStatus] = [:]
     @Published private(set) var githubPullRequestLoadingProjectIDs: Set<ProjectWorkspaceSnapshot.ID> = []
+    @Published private(set) var pullingWorkspaceIDs: Set<ProjectWorkspaceSnapshot.ID> = []
     @Published private(set) var worktreeMemosByProjectID: [ProjectWorkspaceSnapshot.ID: String] = [:]
     @Published private(set) var githubPullRequestStatus: GitHubPullRequestStatus?
     @Published private(set) var externalPullRequestWorktreeCreationRequest: ExternalPullRequestWorktreeCreationRequest?
+    @Published private(set) var isCreatingExternalPullRequestWorktree = false
     @Published private(set) var editorMode: EditorMode = .edit
     @Published private(set) var reviewDiffState = ReviewDiffState.unavailable
     @Published private(set) var reviewDiffBase: GitReviewDiffBase?
@@ -89,6 +92,8 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var isLoadingReviewDiffRemoteBranches = false
     @Published private(set) var reviewDiffRemoteBranchErrorMessage: String?
     @Published private(set) var reviewDiffHideWhitespace = false
+    @Published private(set) var reviewDiffViewedFilePaths: Set<String> = []
+    @Published private(set) var reviewDiffViewedSyncsToPullRequest = false
 
     // MARK: - Review Diff Supporting Types
 
@@ -116,11 +121,16 @@ final class EditorViewModel: ObservableObject {
     private let symbolNavigationService: SymbolNavigationService
     private let gitService: any GitServiceProtocol
     private let githubPullRequestService: any GitHubPullRequestServiceProtocol
+    private let githubPullRequestFileViewsService: any GitHubPullRequestFileViewsServiceProtocol
     private let worktreeMetadataStore: any WorktreeMetadataStoring
     private let worktreeInitializationStore: any WorktreeInitializationStoring
     private let worktreeInitializationService: any WorktreeInitializationServiceProtocol
     private let isFileWatchingEnabled: Bool
     private let gitSnapshotRefreshDelayNanoseconds: UInt64
+    private let githubPullRequestPollingIntervalNanoseconds: UInt64
+    private let isApplicationActive: @MainActor () -> Bool
+    private var githubPullRequestPollingTask: Task<Void, Never>?
+    private var applicationActivationCancellables: Set<AnyCancellable> = []
     private var workspaces: [ProjectWorkspace] = []
     private var saveStore = EditorSaveStore()
     private let codeNavigationStore = EditorCodeNavigationStore()
@@ -140,6 +150,18 @@ final class EditorViewModel: ObservableObject {
     private var reviewDiffRefreshTask: Task<Void, Never>?
     private var reviewDiffRefreshRequestID: UUID?
     private var currentReviewDiffContext: ReviewDiffRequestContext?
+    private var reviewDiffViewedLoadTask: Task<Void, Never>?
+    private var reviewDiffViewedRequestID: UUID?
+    private var reviewDiffViewedPersistenceKey: ReviewBasePersistenceKey?
+    private var reviewDiffViewedPullRequestNodeID: String?
+    private var reviewDiffViewedPullRequestPaths: Set<String> = []
+    private var reviewDiffViewedPullRequestViewedPaths: Set<String> = []
+    private var reviewDiffLocalViewedFingerprints: [String: String] = [:]
+    private var reviewDiffSessionOnlyViewedPaths: Set<String> = []
+    private var reviewDiffViewedMutationGenerations: [String: UUID] = [:]
+    private var reviewDiffViewedMutationSequence = 0
+    private var reviewDiffViewedPendingToggles: [String: Bool] = [:]
+    private var reviewDiffViewedSaveTask: Task<Void, Never>?
     private var hasStartedFileWatcher = false
     private lazy var fileWatcher = ProjectFileWatcher { [weak self] change in
         Task {
@@ -345,24 +367,45 @@ final class EditorViewModel: ObservableObject {
         symbolNavigationService: SymbolNavigationService? = nil,
         gitService: any GitServiceProtocol = GitService(),
         githubPullRequestService: any GitHubPullRequestServiceProtocol = GitHubPullRequestService(),
+        githubPullRequestFileViewsService: any GitHubPullRequestFileViewsServiceProtocol = GitHubPullRequestFileViewsService(),
         worktreeMetadataStore: any WorktreeMetadataStoring = WorktreeMetadataStore(),
         worktreeInitializationStore: any WorktreeInitializationStoring = WorktreeInitializationStore(),
         worktreeInitializationService: any WorktreeInitializationServiceProtocol = WorktreeInitializationService(),
         isFileWatchingEnabled: Bool = true,
-        gitSnapshotRefreshDelayNanoseconds: UInt64 = 1_500_000_000
+        gitSnapshotRefreshDelayNanoseconds: UInt64 = 1_500_000_000,
+        githubPullRequestPollingIntervalNanoseconds: UInt64 = 30_000_000_000,
+        isApplicationActive: @escaping @MainActor () -> Bool = { NSApplication.shared.isActive }
     ) {
         self.fileService = fileService
         self.symbolNavigationService = symbolNavigationService ?? SymbolNavigationService()
         self.gitService = gitService
         self.githubPullRequestService = githubPullRequestService
+        self.githubPullRequestFileViewsService = githubPullRequestFileViewsService
         self.worktreeMetadataStore = worktreeMetadataStore
         self.worktreeInitializationStore = worktreeInitializationStore
         self.worktreeInitializationService = worktreeInitializationService
         self.isFileWatchingEnabled = isFileWatchingEnabled
         self.gitSnapshotRefreshDelayNanoseconds = gitSnapshotRefreshDelayNanoseconds
+        self.githubPullRequestPollingIntervalNanoseconds = githubPullRequestPollingIntervalNanoseconds
+        self.isApplicationActive = isApplicationActive
         self.symbolNavigationService.statusDidChange = { [weak self] status in
             self?.symbolIndexStatus = status
         }
+
+        NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.pollGitHubPullRequests()
+                self?.startGitHubPullRequestPollingIfNeeded()
+            }
+            .store(in: &applicationActivationCancellables)
+        NotificationCenter.default
+            .publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in
+                self?.stopGitHubPullRequestPolling()
+            }
+            .store(in: &applicationActivationCancellables)
+        startGitHubPullRequestPollingIfNeeded()
     }
 
     deinit {
@@ -371,6 +414,7 @@ final class EditorViewModel: ObservableObject {
                 fileWatcher.stopWatchingAll()
             }
             gitSnapshotRefreshTasks.values.forEach { $0.cancel() }
+            githubPullRequestPollingTask?.cancel()
             githubPullRequestRefreshTasks.values.forEach { $0.cancel() }
             worktreeMemoLoadTasks.values.forEach { $0.cancel() }
             worktreeMemoSaveTasks.values.forEach { $0.cancel() }
@@ -378,6 +422,8 @@ final class EditorViewModel: ObservableObject {
             reviewBaseSaveTask?.cancel()
             reviewDiffRemoteBranchLoadTask?.cancel()
             reviewDiffRefreshTask?.cancel()
+            reviewDiffViewedLoadTask?.cancel()
+            reviewDiffViewedSaveTask?.cancel()
             symbolReindexTasksByWorkspaceID.values.forEach { $0.cancel() }
         }
     }
@@ -385,6 +431,18 @@ final class EditorViewModel: ObservableObject {
     // MARK: - Review Mode & Diff Base
 
     func setEditorMode(_ mode: EditorMode) {
+        guard let workspaceID = activeProjectID,
+              let index = workspaceIndex(for: workspaceID) else {
+            applyEditorMode(mode)
+            return
+        }
+
+        let origin = currentNavigationPlace(in: index)
+        applyEditorMode(mode)
+        recordNavigationIfMoved(from: origin, in: workspaceID)
+    }
+
+    private func applyEditorMode(_ mode: EditorMode) {
         switch mode {
         case .edit:
             editorMode = .edit
@@ -442,6 +500,33 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    func setReviewDiffFileViewed(_ isViewed: Bool, path: String) {
+        guard case .loaded(let snapshot) = reviewDiffState,
+              let context = currentReviewDiffContext,
+              let key = reviewBasePersistenceKey(forActiveWorkspace: true),
+              let file = snapshot.files.first(where: { $0.displayRelativePath == path }) else {
+            return
+        }
+
+        let generation = UUID()
+        reviewDiffViewedMutationGenerations[path] = generation
+        if isViewed {
+            reviewDiffViewedFilePaths.insert(path)
+        } else {
+            reviewDiffViewedFilePaths.remove(path)
+        }
+
+        dispatchReviewDiffFileViewed(
+            isViewed,
+            path: path,
+            file: file,
+            context: context,
+            persistenceKey: key,
+            generation: generation,
+            allowsRoutingDeferral: true
+        )
+    }
+
     func loadReviewDiffRemoteBranches(refresh: Bool = true) {
         guard !isLoadingReviewDiffRemoteBranches else { return }
 
@@ -465,7 +550,7 @@ final class EditorViewModel: ObservableObject {
     func refreshGitHubPullRequest() {
         guard let workspaceID = activeProjectID else { return }
 
-        startGitHubPullRequestRefresh(for: workspaceID, force: true)
+        startGitHubPullRequestRefresh(for: workspaceID, trigger: .forced)
     }
 
     func openExternalGitHubPullRequestURL(_ url: URL) async {
@@ -507,8 +592,16 @@ final class EditorViewModel: ObservableObject {
     func confirmExternalPullRequestWorktreeCreation(
         _ request: ExternalPullRequestWorktreeCreationRequest?
     ) async {
-        guard let request else { return }
+        guard let request,
+              !isCreatingExternalPullRequestWorktree else {
+            return
+        }
+
         externalPullRequestWorktreeCreationRequest = nil
+        isCreatingExternalPullRequestWorktree = true
+        defer {
+            isCreatingExternalPullRequestWorktree = false
+        }
 
         do {
             let workspaceID = try await performCreateWorktree(
@@ -605,7 +698,7 @@ final class EditorViewModel: ObservableObject {
         let workspaceIDs = workspaces.map(\.id)
         for workspaceID in workspaceIDs {
             await refreshGitState(for: workspaceID)
-            startGitHubPullRequestRefresh(for: workspaceID, force: true)
+            startGitHubPullRequestRefresh(for: workspaceID, trigger: .forced)
             refreshWorktreeMemo(for: workspaceID)
         }
     }
@@ -1261,10 +1354,20 @@ final class EditorViewModel: ObservableObject {
         )
     }
 
-    func pullWorktree(_ workspaceID: ProjectWorkspaceSnapshot.ID) async throws {
+    @discardableResult
+    func pullWorktree(_ workspaceID: ProjectWorkspaceSnapshot.ID) async throws -> Bool {
         let workspaceID = normalizedProjectID(for: workspaceID)
         guard let targetIndex = workspaceIndex(for: workspaceID) else {
             throw GitPullError.notRepository(workspaceID)
+        }
+
+        guard !pullingWorkspaceIDs.contains(workspaceID) else {
+            return false
+        }
+
+        pullingWorkspaceIDs.insert(workspaceID)
+        defer {
+            pullingWorkspaceIDs.remove(workspaceID)
         }
 
         let targetURL = workspaces[targetIndex].url
@@ -1275,6 +1378,7 @@ final class EditorViewModel: ObservableObject {
             workspaceID,
             change: .workspaceRescan(rootURL: targetURL)
         )
+        return true
     }
 
     func switchGitBranch(named branchName: String) async throws {
@@ -1443,23 +1547,25 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func openFile(_ url: URL) async -> ClosedEditorDocument? {
+        let origin = navigationOriginForActiveWorkspace()
         switchToEditModeForFileOpenIfNeeded()
 
         return await performOpenFile(
             url,
             tabPolicy: .replaceUneditedSelectedTab,
-            recordsNavigation: true
+            origin: origin
         )
     }
 
     @discardableResult
     func openFilePreservingSelectedTab(_ url: URL) async -> ClosedEditorDocument? {
+        let origin = navigationOriginForActiveWorkspace()
         switchToEditModeForFileOpenIfNeeded()
 
         return await performOpenFile(
             url,
             tabPolicy: .preserveSelectedTab,
-            recordsNavigation: true
+            origin: origin
         )
     }
 
@@ -1467,14 +1573,12 @@ final class EditorViewModel: ObservableObject {
     private func performOpenFile(
         _ url: URL,
         tabPolicy: OpenFileTabPolicy,
-        recordsNavigation: Bool
+        origin: EditorNavigationPlace?
     ) async -> ClosedEditorDocument? {
         guard let workspaceID = activeProjectID,
               let index = workspaceIndex(for: workspaceID) else {
             return nil
         }
-
-        let origin = recordsNavigation ? currentNavigationPlace(in: index) : nil
 
         if let existingTab = tab(containing: url, in: index) {
             _ = workspaces[index].tabStore.openTab(
@@ -1666,12 +1770,12 @@ final class EditorViewModel: ObservableObject {
             return nil
         }
 
-        switchToEditModeForFileOpenIfNeeded()
         let origin = currentNavigationPlace(in: index)
+        switchToEditModeForFileOpenIfNeeded()
         let closedDocument = await performOpenFile(
             url,
             tabPolicy: .preserveSelectedTab,
-            recordsNavigation: false
+            origin: nil
         )
 
         guard activeProjectID == workspaceID,
@@ -1759,7 +1863,7 @@ final class EditorViewModel: ObservableObject {
         let closedDocument = await performOpenFile(
             target.url,
             tabPolicy: .preserveSelectedTab,
-            recordsNavigation: false
+            origin: nil
         )
         guard activeProjectID == workspaceID,
               let currentIndex = workspaceIndex(for: workspaceID),
@@ -1972,8 +2076,8 @@ final class EditorViewModel: ObservableObject {
             return nil
         }
 
-        switchToEditModeForFileOpenIfNeeded()
         let origin = currentNavigationPlace(in: index)
+        switchToEditModeForFileOpenIfNeeded()
         let sourceDocumentID = workspaces[index].tabStore.selectedTabID
             .flatMap { workspaces[index].tabStore.tab(for: $0)?.documentID }
 
@@ -2338,13 +2442,37 @@ final class EditorViewModel: ObservableObject {
         _ place: EditorNavigationPlace,
         in workspaceID: ProjectWorkspaceSnapshot.ID
     ) async -> Bool {
+        switch place {
+        case .review:
+            guard activeProjectID == workspaceID,
+                  reviewDiffRequestContext != nil else {
+                return false
+            }
+
+            applyEditorMode(.review)
+            clearError()
+            return true
+
+        case .editor(let documentPlace):
+            return await restoreEditorDocumentPlace(documentPlace, in: workspaceID)
+        }
+    }
+
+    private func restoreEditorDocumentPlace(
+        _ place: EditorDocumentPlace,
+        in workspaceID: ProjectWorkspaceSnapshot.ID
+    ) async -> Bool {
         guard let index = workspaceIndex(for: workspaceID) else { return false }
+
+        if editorMode == .review {
+            applyEditorMode(.edit)
+        }
 
         if tab(containing: place.url, in: index) == nil {
             _ = await performOpenFile(
                 place.url,
                 tabPolicy: .preserveSelectedTab,
-                recordsNavigation: false
+                origin: nil
             )
         }
 
@@ -2379,17 +2507,27 @@ final class EditorViewModel: ObservableObject {
         workspaces[index].navigationHistory.recordNavigation(from: origin)
     }
 
+    private func navigationOriginForActiveWorkspace() -> EditorNavigationPlace? {
+        activeWorkspaceIndex.flatMap { currentNavigationPlace(in: $0) }
+    }
+
     private func currentNavigationPlace(in workspaceIndex: Int) -> EditorNavigationPlace? {
+        if editorMode == .review {
+            return .review
+        }
+
         guard let selectedTabID = workspaces[workspaceIndex].tabStore.selectedTabID,
               let tab = workspaces[workspaceIndex].tabStore.tab(for: selectedTabID),
               let session = workspaces[workspaceIndex].documentStore.session(for: tab.documentID) else {
             return nil
         }
 
-        return EditorNavigationPlace(
-            url: tab.documentID,
-            selectedRange: session.selectedRange,
-            scrollOrigin: session.scrollOrigin
+        return .editor(
+            EditorDocumentPlace(
+                url: tab.documentID,
+                selectedRange: session.selectedRange,
+                scrollOrigin: session.scrollOrigin
+            )
         )
     }
 
@@ -2424,7 +2562,7 @@ final class EditorViewModel: ObservableObject {
         let closedDocument = await performOpenFile(
             target.url,
             tabPolicy: .preserveSelectedTab,
-            recordsNavigation: false
+            origin: nil
         )
         guard activeProjectID == workspaceID,
               let currentIndex = workspaceIndex(for: workspaceID),
@@ -2460,7 +2598,7 @@ final class EditorViewModel: ObservableObject {
         let closedDocument = await performOpenFile(
             url,
             tabPolicy: .preserveSelectedTab,
-            recordsNavigation: false
+            origin: nil
         )
         guard activeProjectID == workspaceID,
               let currentIndex = workspaceIndex(for: workspaceID),
@@ -3181,7 +3319,9 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func isGitHubPullRequestLoading(for workspace: ProjectWorkspace) -> Bool {
-        if workspace.githubPullRequestRefreshRequestID != nil {
+        // サイレント更新(定期ポーリング)は前回の表示を保持したまま再取得するため Loading 扱いにしない。
+        if workspace.githubPullRequestRefreshRequestID != nil,
+           !workspace.isGitHubPullRequestRefreshSilent {
             return true
         }
 
@@ -3403,6 +3543,7 @@ final class EditorViewModel: ObservableObject {
             reviewDiffState = .loaded(snapshot)
             reviewDiffRefreshTask = nil
             reviewDiffRefreshRequestID = nil
+            refreshReviewDiffViewedState()
         } catch {
             guard !Task.isCancelled,
                   reviewDiffRefreshRequestID == requestID,
@@ -3421,6 +3562,404 @@ final class EditorViewModel: ObservableObject {
         reviewDiffRefreshTask = nil
         reviewDiffRefreshRequestID = nil
         currentReviewDiffContext = nil
+        resetReviewDiffViewedState()
+    }
+
+    // MARK: - Review Diff Viewed State
+
+    private func refreshReviewDiffViewedState() {
+        guard editorMode == .review,
+              case .loaded = reviewDiffState,
+              let context = currentReviewDiffContext,
+              let key = reviewBasePersistenceKey(forActiveWorkspace: true) else {
+            resetReviewDiffViewedState()
+            return
+        }
+
+        if reviewDiffViewedPersistenceKey != key {
+            resetReviewDiffViewedState()
+            reviewDiffViewedPersistenceKey = key
+        }
+
+        let requestID = UUID()
+        reviewDiffViewedRequestID = requestID
+        reviewDiffViewedLoadTask?.cancel()
+
+        let pullRequestNumber: Int?
+        if let index = workspaceIndex(for: context.targetWorkspaceID),
+           case .pullRequest(let info) = workspaces[index].githubPullRequestStatus {
+            pullRequestNumber = info.number
+        } else {
+            pullRequestNumber = nil
+        }
+        let targetWorkspaceURL = context.targetWorkspaceURL
+        let capturedMutationSequence = reviewDiffViewedMutationSequence
+
+        reviewDiffViewedLoadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let localFingerprints = await self.worktreeMetadataStore.viewedReviewFiles(
+                forBranch: key.branchName,
+                metadataDirectoryURL: key.metadataDirectoryURL
+            )
+            var pullRequestResult: GitHubPullRequestFileViewsResult?
+            if let pullRequestNumber {
+                pullRequestResult = await self.githubPullRequestFileViewsService.fileViews(
+                    pullRequestNumber: pullRequestNumber,
+                    openedRootURL: targetWorkspaceURL
+                )
+            }
+            guard !Task.isCancelled,
+                  self.reviewDiffViewedRequestID == requestID,
+                  self.reviewDiffViewedPersistenceKey == key else {
+                return
+            }
+
+            guard self.reviewDiffViewedMutationSequence == capturedMutationSequence else {
+                // ロード開始後にトグルが確定した場合、この結果は変異前の状態を含み得る。
+                // 確定済みトグルを巻き戻さないよう捨てて再取得する。
+                self.reviewDiffViewedLoadTask = nil
+                self.refreshReviewDiffViewedState()
+                return
+            }
+
+            self.applyReviewDiffViewedState(
+                localFingerprints: localFingerprints,
+                pullRequestResult: pullRequestResult
+            )
+            self.reviewDiffViewedLoadTask = nil
+        }
+    }
+
+    private func applyReviewDiffViewedState(
+        localFingerprints: [String: String],
+        pullRequestResult: GitHubPullRequestFileViewsResult?
+    ) {
+        guard case .loaded(let snapshot) = reviewDiffState else { return }
+
+        reviewDiffLocalViewedFingerprints = localFingerprints
+
+        switch pullRequestResult {
+        case .available(let views):
+            reviewDiffViewedPullRequestNodeID = views.pullRequestNodeID
+            reviewDiffViewedPullRequestPaths = Set(views.statesByPath.keys)
+            reviewDiffViewedPullRequestViewedPaths = Set(
+                views.statesByPath.filter { $0.value == .viewed }.map(\.key)
+            )
+            // @Published のため、値が変わらない定期リフレッシュで再発火させない。
+            if !reviewDiffViewedSyncsToPullRequest {
+                reviewDiffViewedSyncsToPullRequest = true
+            }
+
+        case .ignored, nil:
+            reviewDiffViewedPullRequestNodeID = nil
+            reviewDiffViewedPullRequestPaths = []
+            reviewDiffViewedPullRequestViewedPaths = []
+            if reviewDiffViewedSyncsToPullRequest {
+                reviewDiffViewedSyncsToPullRequest = false
+            }
+
+        case .failed:
+            // 一時的な取得失敗では前回のPR由来状態を維持する(折りたたみ済みファイルの一斉展開を防ぐ)。
+            break
+        }
+
+        // 進行中の楽観更新は、保存/変異より前に読まれた可能性のあるロード結果より優先する。
+        for path in reviewDiffViewedMutationGenerations.keys {
+            let isOptimisticallyViewed = reviewDiffViewedFilePaths.contains(path)
+            if reviewDiffViewedPullRequestPaths.contains(path) {
+                if isOptimisticallyViewed {
+                    reviewDiffViewedPullRequestViewedPaths.insert(path)
+                } else {
+                    reviewDiffViewedPullRequestViewedPaths.remove(path)
+                }
+            } else if isOptimisticallyViewed {
+                if let fingerprint = snapshot.files.first(where: { $0.displayRelativePath == path })?.contentFingerprint {
+                    reviewDiffLocalViewedFingerprints[path] = fingerprint
+                } else {
+                    reviewDiffSessionOnlyViewedPaths.insert(path)
+                }
+            } else {
+                reviewDiffLocalViewedFingerprints.removeValue(forKey: path)
+                reviewDiffSessionOnlyViewedPaths.remove(path)
+            }
+        }
+
+        // PRのviewed情報が未取得だったためルーティングを保留していたトグルを確定させる。
+        let pendingToggles = reviewDiffViewedPendingToggles
+        reviewDiffViewedPendingToggles = [:]
+        if !pendingToggles.isEmpty,
+           let context = currentReviewDiffContext,
+           let key = reviewBasePersistenceKey(forActiveWorkspace: true) {
+            for (path, isViewed) in pendingToggles {
+                guard let generation = reviewDiffViewedMutationGenerations[path],
+                      let file = snapshot.files.first(where: { $0.displayRelativePath == path }) else {
+                    continue
+                }
+
+                dispatchReviewDiffFileViewed(
+                    isViewed,
+                    path: path,
+                    file: file,
+                    context: context,
+                    persistenceKey: key,
+                    generation: generation,
+                    allowsRoutingDeferral: false
+                )
+            }
+        }
+
+        dismissStaleLocalViewedEntries(snapshot: snapshot)
+        recomputeReviewDiffViewedFilePaths(snapshot: snapshot)
+    }
+
+    /// GitHubのDISMISSED相当: 保存済みfingerprintと現在の内容の不一致を観測した時点で
+    /// ローカルのviewedエントリを削除し、内容が元に戻ってもviewedが復活しないようにする。
+    private func dismissStaleLocalViewedEntries(snapshot: GitReviewDiffSnapshot) {
+        guard let key = reviewDiffViewedPersistenceKey else { return }
+
+        for file in snapshot.files {
+            let path = file.displayRelativePath
+            guard !path.isEmpty,
+                  reviewDiffViewedMutationGenerations[path] == nil,
+                  !reviewDiffViewedPullRequestPaths.contains(path),
+                  let storedFingerprint = reviewDiffLocalViewedFingerprints[path],
+                  let currentFingerprint = file.contentFingerprint,
+                  storedFingerprint != currentFingerprint else {
+                continue
+            }
+
+            reviewDiffLocalViewedFingerprints.removeValue(forKey: path)
+            persistViewedReviewFileRemoval(path: path, persistenceKey: key)
+        }
+    }
+
+    private func persistViewedReviewFileRemoval(path: String, persistenceKey: ReviewBasePersistenceKey) {
+        let previousSaveTask = reviewDiffViewedSaveTask
+        reviewDiffViewedSaveTask = Task { @MainActor [weak self] in
+            await previousSaveTask?.value
+            guard let self else { return }
+            do {
+                try await self.worktreeMetadataStore.saveViewedReviewFile(
+                    path: path,
+                    fingerprint: nil,
+                    forBranch: persistenceKey.branchName,
+                    metadataDirectoryURL: persistenceKey.metadataDirectoryURL,
+                    repositoryRootURL: persistenceKey.repositoryRootURL
+                )
+                self.reviewDiffViewedMutationSequence += 1
+            } catch {
+                // ベストエフォート: 失敗しても次に不一致を観測したとき再試行される。
+            }
+        }
+    }
+
+    private func dispatchReviewDiffFileViewed(
+        _ isViewed: Bool,
+        path: String,
+        file: GitReviewFileDiff,
+        context: ReviewDiffRequestContext,
+        persistenceKey: ReviewBasePersistenceKey,
+        generation: UUID,
+        allowsRoutingDeferral: Bool
+    ) {
+        reviewDiffViewedPendingToggles.removeValue(forKey: path)
+
+        if let nodeID = reviewDiffViewedPullRequestNodeID,
+           reviewDiffViewedPullRequestPaths.contains(path) {
+            reviewDiffViewedMutationSequence += 1
+            setPullRequestFileViewed(
+                isViewed,
+                path: path,
+                pullRequestNodeID: nodeID,
+                targetWorkspaceURL: context.targetWorkspaceURL,
+                persistenceKey: persistenceKey,
+                generation: generation
+            )
+            return
+        }
+
+        if allowsRoutingDeferral,
+           reviewDiffViewedPullRequestNodeID == nil,
+           targetWorkspaceHasPullRequest(context) {
+            // PRは存在するがviewed情報のロード前でPRファイル一覧が不明。
+            // 誤ってローカルに保存しないよう、ロード適用時に振り分ける。
+            reviewDiffViewedPendingToggles[path] = isViewed
+            if reviewDiffViewedLoadTask == nil {
+                refreshReviewDiffViewedState()
+            }
+            return
+        }
+
+        reviewDiffViewedMutationSequence += 1
+        setLocalFileViewed(
+            isViewed,
+            path: path,
+            fingerprint: file.contentFingerprint,
+            persistenceKey: persistenceKey,
+            generation: generation
+        )
+    }
+
+    private func targetWorkspaceHasPullRequest(_ context: ReviewDiffRequestContext) -> Bool {
+        guard let index = workspaceIndex(for: context.targetWorkspaceID),
+              case .pullRequest = workspaces[index].githubPullRequestStatus else {
+            return false
+        }
+
+        return true
+    }
+
+    private func recomputeReviewDiffViewedFilePaths(snapshot: GitReviewDiffSnapshot) {
+        var viewedPaths: Set<String> = []
+        for file in snapshot.files {
+            let path = file.displayRelativePath
+            guard !path.isEmpty else { continue }
+
+            if reviewDiffViewedPullRequestPaths.contains(path) {
+                if reviewDiffViewedPullRequestViewedPaths.contains(path) {
+                    viewedPaths.insert(path)
+                }
+            } else if reviewDiffSessionOnlyViewedPaths.contains(path) {
+                viewedPaths.insert(path)
+            } else if let fingerprint = file.contentFingerprint,
+                      reviewDiffLocalViewedFingerprints[path] == fingerprint {
+                viewedPaths.insert(path)
+            }
+        }
+        if reviewDiffViewedFilePaths != viewedPaths {
+            reviewDiffViewedFilePaths = viewedPaths
+        }
+    }
+
+    private func resetReviewDiffViewedState() {
+        reviewDiffViewedLoadTask?.cancel()
+        reviewDiffViewedLoadTask = nil
+        reviewDiffViewedRequestID = nil
+        reviewDiffViewedPersistenceKey = nil
+        reviewDiffViewedPullRequestNodeID = nil
+        reviewDiffViewedPullRequestPaths = []
+        reviewDiffViewedPullRequestViewedPaths = []
+        reviewDiffLocalViewedFingerprints = [:]
+        reviewDiffSessionOnlyViewedPaths = []
+        reviewDiffViewedMutationGenerations = [:]
+        reviewDiffViewedPendingToggles = [:]
+        if !reviewDiffViewedFilePaths.isEmpty {
+            reviewDiffViewedFilePaths = []
+        }
+        if reviewDiffViewedSyncsToPullRequest {
+            reviewDiffViewedSyncsToPullRequest = false
+        }
+    }
+
+    private func setPullRequestFileViewed(
+        _ isViewed: Bool,
+        path: String,
+        pullRequestNodeID: String,
+        targetWorkspaceURL: URL,
+        persistenceKey: ReviewBasePersistenceKey,
+        generation: UUID
+    ) {
+        if isViewed {
+            reviewDiffViewedPullRequestViewedPaths.insert(path)
+        } else {
+            reviewDiffViewedPullRequestViewedPaths.remove(path)
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.githubPullRequestFileViewsService.setFileViewed(
+                    isViewed,
+                    pullRequestNodeID: pullRequestNodeID,
+                    path: path,
+                    openedRootURL: targetWorkspaceURL
+                )
+                // 変異前のサーバー状態を読んだ可能性のあるin-flightロードを無効化する。
+                self.reviewDiffViewedMutationSequence += 1
+                self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+            } catch {
+                guard self.reviewDiffViewedMutationGenerations[path] == generation,
+                      self.reviewDiffViewedPersistenceKey == persistenceKey else {
+                    self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+                    return
+                }
+
+                self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+                if isViewed {
+                    self.reviewDiffViewedFilePaths.remove(path)
+                    self.reviewDiffViewedPullRequestViewedPaths.remove(path)
+                } else {
+                    self.reviewDiffViewedFilePaths.insert(path)
+                    self.reviewDiffViewedPullRequestViewedPaths.insert(path)
+                }
+                self.currentError = EditorError(message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func clearReviewDiffViewedMutationGeneration(_ generation: UUID, path: String) {
+        if reviewDiffViewedMutationGenerations[path] == generation {
+            reviewDiffViewedMutationGenerations.removeValue(forKey: path)
+        }
+    }
+
+    private func setLocalFileViewed(
+        _ isViewed: Bool,
+        path: String,
+        fingerprint: String?,
+        persistenceKey: ReviewBasePersistenceKey,
+        generation: UUID
+    ) {
+        guard let fingerprint else {
+            // fingerprintが取れないファイルは検証できないため永続化せず、セッション内だけ有効にする。
+            if isViewed {
+                reviewDiffSessionOnlyViewedPaths.insert(path)
+            } else {
+                reviewDiffSessionOnlyViewedPaths.remove(path)
+            }
+            return
+        }
+
+        reviewDiffSessionOnlyViewedPaths.remove(path)
+        if isViewed {
+            reviewDiffLocalViewedFingerprints[path] = fingerprint
+        } else {
+            reviewDiffLocalViewedFingerprints.removeValue(forKey: path)
+        }
+
+        let previousSaveTask = reviewDiffViewedSaveTask
+        reviewDiffViewedSaveTask = Task { @MainActor [weak self] in
+            await previousSaveTask?.value
+            guard let self else { return }
+            do {
+                try await self.worktreeMetadataStore.saveViewedReviewFile(
+                    path: path,
+                    fingerprint: isViewed ? fingerprint : nil,
+                    forBranch: persistenceKey.branchName,
+                    metadataDirectoryURL: persistenceKey.metadataDirectoryURL,
+                    repositoryRootURL: persistenceKey.repositoryRootURL
+                )
+                // 保存前のストア内容を読んだ可能性のあるin-flightロードを無効化する。
+                self.reviewDiffViewedMutationSequence += 1
+                self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+            } catch {
+                guard self.reviewDiffViewedMutationGenerations[path] == generation,
+                      self.reviewDiffViewedPersistenceKey == persistenceKey else {
+                    self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+                    return
+                }
+
+                self.clearReviewDiffViewedMutationGeneration(generation, path: path)
+                if isViewed {
+                    self.reviewDiffViewedFilePaths.remove(path)
+                    self.reviewDiffLocalViewedFingerprints.removeValue(forKey: path)
+                } else {
+                    self.reviewDiffViewedFilePaths.insert(path)
+                    self.reviewDiffLocalViewedFingerprints[path] = fingerprint
+                }
+                self.currentError = EditorError(message: error.localizedDescription)
+            }
+        }
     }
 
     // MARK: - Related Worktrees
@@ -3671,6 +4210,8 @@ final class EditorViewModel: ObservableObject {
             reviewDiffState = .loaded(updatedSnapshot)
             reviewDiffRefreshTask = nil
             reviewDiffRefreshRequestID = nil
+            dismissStaleLocalViewedEntries(snapshot: updatedSnapshot)
+            recomputeReviewDiffViewedFilePaths(snapshot: updatedSnapshot)
             return true
         } catch {
             guard reviewDiffRefreshRequestID == requestID,
@@ -3737,16 +4278,58 @@ final class EditorViewModel: ObservableObject {
         }
 
         refreshWorktreeMemo(for: workspaceID)
-        startGitHubPullRequestRefresh(for: workspaceID, force: false)
+        startGitHubPullRequestRefresh(for: workspaceID, trigger: .lookupKeyChange)
 
         return status
     }
 
     // MARK: - GitHub Pull Request Internals
 
+    private func startGitHubPullRequestPollingIfNeeded() {
+        guard githubPullRequestPollingIntervalNanoseconds > 0,
+              githubPullRequestPollingTask == nil else { return }
+
+        let interval = githubPullRequestPollingIntervalNanoseconds
+        githubPullRequestPollingTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+
+                guard let self else { return }
+                // 通知の取りこぼしに備えた二重の防御。非アクティブ時は gh を叩かない。
+                guard self.isApplicationActive() else { continue }
+
+                self.pollGitHubPullRequests()
+            }
+        }
+    }
+
+    private func stopGitHubPullRequestPolling() {
+        githubPullRequestPollingTask?.cancel()
+        githubPullRequestPollingTask = nil
+    }
+
+    private func pollGitHubPullRequests() {
+        for workspace in workspaces where githubPullRequestLookupKey(for: workspace) != nil {
+            startGitHubPullRequestRefresh(for: workspace.id, trigger: .polling)
+        }
+    }
+
+    private enum GitHubPullRequestRefreshTrigger {
+        /// lookupKey が変わったときだけ再取得する(変わっていなければスキップ)。
+        case lookupKeyChange
+        /// 常に再取得し、取得中は Loading 表示にする。
+        case forced
+        /// 常に再取得するが、取得完了まで現在の表示を保持する(定期ポーリング用)。
+        case polling
+    }
+
     private func startGitHubPullRequestRefresh(
         for workspaceID: ProjectWorkspaceSnapshot.ID,
-        force: Bool
+        trigger: GitHubPullRequestRefreshTrigger
     ) {
         guard let index = workspaceIndex(for: workspaceID) else { return }
 
@@ -3754,17 +4337,25 @@ final class EditorViewModel: ObservableObject {
             clearGitHubPullRequest(for: workspaceID)
             return
         }
-        if !force,
+        if trigger == .lookupKeyChange,
            workspaces[index].githubPullRequestLookupKey == lookupKey {
+            return
+        }
+        // ポーリングは実行中のリクエストを奪わない(遅い応答を毎回 cancel すると完了しなくなる)。
+        if trigger == .polling,
+           workspaces[index].githubPullRequestRefreshRequestID != nil {
             return
         }
 
         let requestID = UUID()
         workspaces[index].githubPullRequestLookupKey = lookupKey
-        workspaces[index].githubPullRequestStatus = nil
         workspaces[index].githubPullRequestRefreshRequestID = requestID
+        workspaces[index].isGitHubPullRequestRefreshSilent = trigger == .polling
         githubPullRequestRefreshTasks[workspaceID]?.cancel()
-        publishGitState()
+        if trigger != .polling {
+            workspaces[index].githubPullRequestStatus = nil
+            publishGitState()
+        }
 
         let branchName = lookupKey.branchName
         let baseBranchName = lookupKey.baseBranchName
@@ -3839,10 +4430,27 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
+        let wasSilentRefresh = workspaces[currentIndex].isGitHubPullRequestRefreshSilent
+        let newStatus = pullRequestStatus?.preservingDeterminateMergeableState(
+            from: workspaces[currentIndex].githubPullRequestStatus
+        )
+        let didChangeStatus = newStatus != workspaces[currentIndex].githubPullRequestStatus
+
         githubPullRequestRefreshTasks.removeValue(forKey: workspaceID)
-        workspaces[currentIndex].githubPullRequestStatus = pullRequestStatus
+        workspaces[currentIndex].githubPullRequestStatus = newStatus
         workspaces[currentIndex].githubPullRequestRefreshRequestID = nil
-        publishGitState()
+        workspaces[currentIndex].isGitHubPullRequestRefreshSilent = false
+        // サイレントポーリングで結果が不変なら publish しない。無条件に publish すると
+        // 30秒ごとに @Published が発火し、レビュー差分の巨大ビューツリー全体が再駆動される。
+        // 非サイレント時は開始時に loading 状態を publish 済みのため、解除の publish が必要。
+        if didChangeStatus || !wasSilentRefresh {
+            publishGitState()
+        }
+
+        if editorMode == .review,
+           currentReviewDiffContext?.targetWorkspaceID == workspaceID {
+            refreshReviewDiffViewedState()
+        }
     }
 
     private func clearGitHubPullRequest(for workspaceID: ProjectWorkspaceSnapshot.ID) {
@@ -3854,6 +4462,7 @@ final class EditorViewModel: ObservableObject {
         workspaces[index].githubPullRequestStatus = nil
         workspaces[index].githubPullRequestLookupKey = nil
         workspaces[index].githubPullRequestRefreshRequestID = nil
+        workspaces[index].isGitHubPullRequestRefreshSilent = false
         githubPullRequestRefreshTasks.removeValue(forKey: workspaceID)?.cancel()
         if hadState {
             publishGitState()

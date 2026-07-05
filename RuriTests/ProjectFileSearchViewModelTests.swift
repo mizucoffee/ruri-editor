@@ -26,6 +26,44 @@ final class ProjectFileSearchViewModelTests: XCTestCase {
         XCTAssertEqual(fileCount, 1)
     }
 
+    func testQueryChangeResetsSelectionToFirstResult() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        try "ant".write(to: rootURL.appending(path: "Ant.swift"), atomically: true, encoding: .utf8)
+        try "apple".write(to: rootURL.appending(path: "Apple.swift"), atomically: true, encoding: .utf8)
+        try "banana".write(to: rootURL.appending(path: "Banana.swift"), atomically: true, encoding: .utf8)
+
+        let viewModel = ProjectFileSearchViewModel(fileService: try makeFileService())
+
+        viewModel.present(projectURL: rootURL)
+        _ = try await waitForIndexReady(in: viewModel)
+
+        viewModel.query = "a"
+        try await waitForResultCount(3, in: viewModel)
+
+        viewModel.selectNextResult()
+        viewModel.selectNextResult()
+        XCTAssertEqual(viewModel.selectedResultID, viewModel.results[2].id)
+
+        // "an" ではBananaが2位に残るため、旧実装の「選択維持」だと先頭に戻らない
+        viewModel.query = "an"
+        try await waitForResultCount(2, in: viewModel)
+
+        XCTAssertEqual(viewModel.selectedResultID, viewModel.results.first?.id)
+    }
+
+    private func waitForResultCount(
+        _ count: Int,
+        in viewModel: ProjectFileSearchViewModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        try await TestSupport.waitUntil("file search results count \(count)", file: file, line: line) {
+            viewModel.results.count == count
+        }
+    }
+
     private func waitForIndexReady(
         in viewModel: ProjectFileSearchViewModel,
         file: StaticString = #filePath,

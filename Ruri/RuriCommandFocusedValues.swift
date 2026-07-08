@@ -13,6 +13,10 @@ private struct RuriToggleTerminalOverviewCommandActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+private struct RuriToggleReviewZenCommandActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var ruriOpenFolderCommandAction: (() -> Void)? {
         get { self[RuriOpenFolderCommandActionKey.self] }
@@ -22,5 +26,10 @@ extension FocusedValues {
     var ruriToggleTerminalOverviewCommandAction: (() -> Void)? {
         get { self[RuriToggleTerminalOverviewCommandActionKey.self] }
         set { self[RuriToggleTerminalOverviewCommandActionKey.self] = newValue }
+    }
+
+    var ruriToggleReviewZenCommandAction: (() -> Void)? {
+        get { self[RuriToggleReviewZenCommandActionKey.self] }
+        set { self[RuriToggleReviewZenCommandActionKey.self] = newValue }
     }
 }

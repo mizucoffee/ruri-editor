@@ -142,8 +142,12 @@ final class TerminalViewModel: ObservableObject, TerminalRuntimeDelegate {
     }
 
     func toggleMinimized() {
-        guard hasActiveWorkspace else { return }
-        isMinimized.toggle()
+        setMinimized(!isMinimized)
+    }
+
+    func setMinimized(_ minimized: Bool) {
+        guard hasActiveWorkspace, isMinimized != minimized else { return }
+        isMinimized = minimized
         markVisibleSelectedTerminalSeen()
         publishActiveWorkspace()
         publishWorkspaceSnapshots()

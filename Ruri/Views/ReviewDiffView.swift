@@ -134,7 +134,6 @@ struct ReviewDiffView: View {
             .toggleStyle(.checkbox)
             .controlSize(.small)
             .fixedSize()
-            .disabled(displayMode == .sideBySide)
             .help("Wrap diff lines")
             .accessibilityLabel("Wrap diff lines")
     }
@@ -1043,11 +1042,16 @@ private extension SourceDiffLine.Kind {
 enum ReviewDiffLayout {
     static let minimumContentWidth: CGFloat = 760
 
-    /// 1ペイン(NSTextView)あたりの最大行数。レイヤーバックのビューは
-    /// Retina(2x)でおよそ8,000pt(Metalテクスチャ上限16384px)を超えた部分の
-    /// 描画が破棄されるため、長いファイルはこの行数ごとにペインを分割して
+    /// 非折り返し時の1ペイン(NSTextView)あたりの最大行数。レイヤーバックの
+    /// ビューはRetina(2x)でおよそ8,000pt(Metalテクスチャ上限16384px)を超えた
+    /// 部分の描画が破棄されるため、長いファイルはこの行数ごとにペインを分割して
     /// 積み上げる。256行 × 約20pt ≈ 5,100pt で上限に対して十分な余裕を持つ。
     static let maxLinesPerPane = 256
+
+    /// 折り返し有効時の1ペインあたりの推定表示行数の予算。推定(char-fit)は
+    /// word wrap の実測より小さくなり得るため、実測が2倍に上振れしても
+    /// レイヤー上限を超えない値にする(192行 × 約20pt ≈ 3,800pt)。
+    static let maxEstimatedRowsPerWrappedPane = 192
     static let codeFontSize: CGFloat = 12
     static let lineNumberWidth: CGFloat = 52
     static let lineNumberTrailingPadding: CGFloat = 8
@@ -1059,6 +1063,16 @@ enum ReviewDiffLayout {
     static var codeLineHeight: CGFloat {
         let font = NSFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular)
         return ceil(font.ascender - font.descender + font.leading) + 4
+    }
+
+    /// 等幅フォント1桁分の advance。折り返し表示行数の推定に使う。
+    static let codeCharWidth: CGFloat = {
+        let font = NSFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular)
+        return ("0" as NSString).size(withAttributes: [.font: font]).width
+    }()
+
+    static func gutterWidth(gutterColumnCount: Int) -> CGFloat {
+        CGFloat(gutterColumnCount) * lineNumberColumnWidth + markerWidth + 8
     }
 
     static var lineNumberColumnWidth: CGFloat {
@@ -1098,21 +1112,78 @@ private struct ReviewDiffFileContentView: View {
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
     @State private var horizontalSync = ReviewDiffFileHorizontalSyncGroups()
+    @State private var rowHeightSyncs = ReviewDiffFileRowHeightSyncStore()
+    @State private var paneWidth: CGFloat?
 
     var body: some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.width
+            } action: { newValue in
+                paneWidth = newValue
+            }
+    }
+
+    /// 折り返し時に1表示行へ収まる推定カラム数。プレースホルダ高の推定と
+    /// チャンク分割の両方が必ず同じ値を使うこと(境界がずれると高さが乖離する)。
+    private var unifiedColumnsPerRow: Int? {
+        guard wrapLines else { return nil }
+        return ReviewDiffScrollLayout.estimatedColumnsPerRow(
+            paneWidth: ReviewDiffScrollLayout.bucketedPaneWidth(paneWidth ?? ReviewDiffLayout.minimumContentWidth),
+            gutterWidth: ReviewDiffLayout.gutterWidth(
+                gutterColumnCount: ReviewDiffRenderedDocument.Pane.unified.gutterColumnCount
+            ),
+            textInsetWidth: ReviewDiffLayout.textContainerInset.width,
+            characterWidth: ReviewDiffLayout.codeCharWidth
+        )
+    }
+
+    private var unifiedRowBudget: Int {
+        wrapLines ? ReviewDiffLayout.maxEstimatedRowsPerWrappedPane : ReviewDiffLayout.maxLinesPerPane
+    }
+
+    /// side-by-side 用の `unifiedColumnsPerRow`。ペインが半分幅・gutter 1列である
+    /// こと以外は同じ規則で、プレースホルダ推定とチャンク分割が必ず同じ値を使う。
+    private var sideBySideColumnsPerRow: Int? {
+        guard wrapLines else { return nil }
+        return ReviewDiffScrollLayout.estimatedColumnsPerRow(
+            paneWidth: ReviewDiffScrollLayout.bucketedPaneWidth(
+                (paneWidth ?? ReviewDiffLayout.minimumContentWidth) / 2
+            ),
+            gutterWidth: ReviewDiffLayout.gutterWidth(
+                gutterColumnCount: ReviewDiffRenderedDocument.Pane.old.gutterColumnCount
+            ),
+            textInsetWidth: ReviewDiffLayout.textContainerInset.width,
+            characterWidth: ReviewDiffLayout.codeCharWidth
+        )
+    }
+
+    private var sideBySideRowBudget: Int {
+        wrapLines ? ReviewDiffLayout.maxEstimatedRowsPerWrappedPane : ReviewDiffLayout.maxLinesPerPane
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch displayMode {
         case .unified:
             if !isNearViewport {
                 // オフスクリーンではドキュメント構築もNSScrollView生成もせず、
                 // 実体化後と同一高さの空プレースホルダだけを置く(スクロールバー安定のため
-                // 高さは行数から厳密に一致させる)。
-                panePlaceholder(totalLineCount: ReviewDiffRenderedDocument.unifiedLineCount(for: file))
+                // 高さはチャンク分割計画の推定表示行数から厳密に一致させる)。
+                panePlaceholder(
+                    chunkRowCounts: ReviewDiffRenderedDocument.unifiedEstimatedChunkRowCounts(
+                        for: file,
+                        columnsPerRow: unifiedColumnsPerRow,
+                        maxEstimatedRowsPerDocument: unifiedRowBudget
+                    )
+                )
             } else {
                 let documents = ReviewDiffRenderedDocument.unifiedDocuments(
                     for: file,
                     oldFileURL: oldFileURL,
                     newFileURL: newFileURL,
-                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
+                    columnsPerRow: unifiedColumnsPerRow,
+                    maxEstimatedRowsPerDocument: unifiedRowBudget
                 )
                 let fileCodeWidth = documents.map(\.maximumCodeWidth).max() ?? 0
                 VStack(alignment: .leading, spacing: 0) {
@@ -1123,6 +1194,7 @@ private struct ReviewDiffFileContentView: View {
                             syntaxHighlights: syntaxHighlights,
                             wrapLines: wrapLines,
                             horizontalSync: wrapLines ? nil : horizontalSync.unified,
+                            rowHeightSync: nil,
                             requestCodeNavigation: requestCodeNavigation,
                             codeNavigationHoverRange: codeNavigationHoverRange
                         )
@@ -1133,20 +1205,29 @@ private struct ReviewDiffFileContentView: View {
 
         case .sideBySide:
             if !isNearViewport {
-                // old/new はペア化により常に同一行数のため、片側の行数で高さが確定する。
-                panePlaceholder(totalLineCount: ReviewDiffRenderedDocument.sideBySideLineCount(for: file))
+                // old/new はペア化により常に同一行数(折り返し時もペア行ごとの max を
+                // 共有)のため、片側の分割計画で高さが確定する。
+                panePlaceholder(
+                    chunkRowCounts: ReviewDiffRenderedDocument.sideBySideEstimatedChunkRowCounts(
+                        for: file,
+                        columnsPerRow: sideBySideColumnsPerRow,
+                        maxEstimatedRowsPerDocument: sideBySideRowBudget
+                    )
+                )
             } else {
                 let oldDocuments = ReviewDiffRenderedDocument.sideBySideDocuments(
                     for: file,
                     side: .old,
                     fileURL: oldFileURL,
-                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
+                    columnsPerRow: sideBySideColumnsPerRow,
+                    maxEstimatedRowsPerDocument: sideBySideRowBudget
                 )
                 let newDocuments = ReviewDiffRenderedDocument.sideBySideDocuments(
                     for: file,
                     side: .new,
                     fileURL: newFileURL,
-                    maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane
+                    columnsPerRow: sideBySideColumnsPerRow,
+                    maxEstimatedRowsPerDocument: sideBySideRowBudget
                 )
                 let oldCodeWidth = oldDocuments.map(\.maximumCodeWidth).max() ?? 0
                 let newCodeWidth = newDocuments.map(\.maximumCodeWidth).max() ?? 0
@@ -1157,8 +1238,9 @@ private struct ReviewDiffFileContentView: View {
                                 document: oldDocuments[index],
                                 minimumCodeWidth: oldCodeWidth,
                                 syntaxHighlights: syntaxHighlights,
-                                wrapLines: false,
-                                horizontalSync: horizontalSync.old,
+                                wrapLines: wrapLines,
+                                horizontalSync: wrapLines ? nil : horizontalSync.old,
+                                rowHeightSync: wrapLines ? rowHeightSyncs.sync(forChunk: index) : nil,
                                 requestCodeNavigation: requestCodeNavigation,
                                 codeNavigationHoverRange: codeNavigationHoverRange
                             )
@@ -1169,8 +1251,9 @@ private struct ReviewDiffFileContentView: View {
                                 document: newDocuments[index],
                                 minimumCodeWidth: newCodeWidth,
                                 syntaxHighlights: syntaxHighlights,
-                                wrapLines: false,
-                                horizontalSync: horizontalSync.new,
+                                wrapLines: wrapLines,
+                                horizontalSync: wrapLines ? nil : horizontalSync.new,
+                                rowHeightSync: wrapLines ? rowHeightSyncs.sync(forChunk: index) : nil,
                                 requestCodeNavigation: requestCodeNavigation,
                                 codeNavigationHoverRange: codeNavigationHoverRange
                             )
@@ -1183,12 +1266,11 @@ private struct ReviewDiffFileContentView: View {
         }
     }
 
-    private func panePlaceholder(totalLineCount: Int) -> some View {
+    private func panePlaceholder(chunkRowCounts: [Int]) -> some View {
         Color.clear
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(minHeight: ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
-                totalLineCount: totalLineCount,
-                maxLinesPerDocument: ReviewDiffLayout.maxLinesPerPane,
+                chunkRowCounts: chunkRowCounts,
                 lineHeight: ReviewDiffLayout.codeLineHeight,
                 textInsetHeight: ReviewDiffLayout.textContainerInset.height
             ))
@@ -1201,15 +1283,20 @@ private struct ReviewDiffFileContentView: View {
 /// 1チャンク分のペイン。チャンク単位でもビューポート近傍判定を行い、
 /// 範囲外は同一高さのプレースホルダに置き換える(巨大ファイルでも
 /// 実体化されるNSScrollView/NSTextViewを可視近傍分に抑える)。
+/// 高さは推定表示行数を初期値に、実体化後は TextKit の実測高へ追従する
+/// (SwiftUI は NSViewRepresentable の intrinsic 変化を自動追従しないため、
+/// 実測はコールバックで受け取って明示的に frame へ反映する)。
 private struct ReviewDiffChunkedTextPane: View {
     let document: ReviewDiffRenderedDocument
     let minimumCodeWidth: CGFloat
     let syntaxHighlights: ReviewDiffSyntaxHighlights
     let wrapLines: Bool
     let horizontalSync: ReviewDiffPaneHorizontalSync?
+    let rowHeightSync: ReviewDiffPaneRowHeightSync?
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
     @State private var isNearViewport = false
+    @State private var measuredHeight: CGFloat?
 
     var body: some View {
         Group {
@@ -1220,25 +1307,41 @@ private struct ReviewDiffChunkedTextPane: View {
                     syntaxHighlights: syntaxHighlights,
                     wrapLines: wrapLines,
                     horizontalSync: horizontalSync,
+                    rowHeightSync: rowHeightSync,
                     requestCodeNavigation: requestCodeNavigation,
-                    codeNavigationHoverRange: codeNavigationHoverRange
+                    codeNavigationHoverRange: codeNavigationHoverRange,
+                    onMeasuredHeightChange: { newValue in
+                        guard abs((measuredHeight ?? -1) - newValue) > 0.5 else { return }
+                        measuredHeight = newValue
+                    }
                 )
             } else {
+                // 一度実測した高さは離脱後のプレースホルダにも引き継ぎ、
+                // 実体化/解放の往復でスクロール位置が揺れないようにする。
                 Color.clear
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: ReviewDiffScrollLayout.estimatedDocumentHeight(
-            lineCount: document.lineCount,
-            lineHeight: ReviewDiffLayout.codeLineHeight,
-            textInsetHeight: ReviewDiffLayout.textContainerInset.height
-        ))
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(height: measuredHeight ?? estimatedHeight)
+        .onChange(of: document.estimatedRowCount) { _, _ in
+            measuredHeight = nil
+        }
+        .onChange(of: wrapLines) { _, _ in
+            measuredHeight = nil
+        }
         .background {
             ReviewDiffVisibilitySensor { newValue in
                 isNearViewport = newValue
             }
         }
+    }
+
+    private var estimatedHeight: CGFloat {
+        ReviewDiffScrollLayout.estimatedDocumentHeight(
+            rowCount: document.estimatedRowCount,
+            lineHeight: ReviewDiffLayout.codeLineHeight,
+            textInsetHeight: ReviewDiffLayout.textContainerInset.height
+        )
     }
 }
 
@@ -1265,6 +1368,7 @@ private final class ReviewDiffVisibilitySensorView: NSView {
     var onChange: ((Bool) -> Void)?
     private var lastIsNear: Bool?
     private weak var observedClipView: NSClipView?
+    private weak var observedDocumentView: NSView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1297,25 +1401,52 @@ private final class ReviewDiffVisibilitySensorView: NSView {
     }
 
     private func observeEnclosingClipView() {
-        let clipView = enclosingScrollView?.contentView
-        guard clipView !== observedClipView else { return }
-
-        if let observedClipView {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSView.boundsDidChangeNotification,
-                object: observedClipView
-            )
+        let scrollView = enclosingScrollView
+        let clipView = scrollView?.contentView
+        if clipView !== observedClipView {
+            if let observedClipView {
+                NotificationCenter.default.removeObserver(
+                    self,
+                    name: NSView.boundsDidChangeNotification,
+                    object: observedClipView
+                )
+            }
+            observedClipView = clipView
+            if let clipView {
+                clipView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(geometryDidChange(_:)),
+                    name: NSView.boundsDidChangeNotification,
+                    object: clipView
+                )
+            }
         }
-        observedClipView = clipView
-        if let clipView {
-            clipView.postsBoundsChangedNotifications = true
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(geometryDidChange(_:)),
-                name: NSView.boundsDidChangeNotification,
-                object: clipView
-            )
+
+        // スクロール(clip bounds)と自身の frame 変化だけでは足りない。wrap トグルの
+        // ようにスクロールを伴わない大規模リレイアウトでは、先行ペインの高さ変化で
+        // 自分の絶対位置だけが(祖先の移動として)変わり、どちらの通知も届かないまま
+        // ビューポート内にプレースホルダが取り残される。コンテンツ全体の高さ変化は
+        // 必ず document view の frame 変化として現れるため、それも購読して再評価する。
+        let documentView = scrollView?.documentView
+        if documentView !== observedDocumentView {
+            if let observedDocumentView {
+                NotificationCenter.default.removeObserver(
+                    self,
+                    name: NSView.frameDidChangeNotification,
+                    object: observedDocumentView
+                )
+            }
+            observedDocumentView = documentView
+            if let documentView {
+                documentView.postsFrameChangedNotifications = true
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(geometryDidChange(_:)),
+                    name: NSView.frameDidChangeNotification,
+                    object: documentView
+                )
+            }
         }
     }
 
@@ -1379,6 +1510,73 @@ private final class ReviewDiffPaneHorizontalSync {
     }
 }
 
+// MARK: - Row Height Sync
+
+/// side-by-side 折り返し時に、同一チャンクペア(old/new)の論理行ごとの
+/// 実測折り返し行数を突き合わせ、ペア行の表示高さを両サイドの max に揃える
+/// パディングを配るコーディネータ。入力は TextKit の実測(line fragment 数)
+/// のみで、パディング適用(paragraphSpacing)は折り返し位置にも fragment 数にも
+/// 影響しないため、フィードバックループは生じない。
+@MainActor
+private final class ReviewDiffPaneRowHeightSync {
+    private let panes = NSHashTable<ReviewDiffTextPaneAppKitView>.weakObjects()
+    private var oldNaturalRows: [Int]?
+    private var newNaturalRows: [Int]?
+
+    func register(_ pane: ReviewDiffTextPaneAppKitView) {
+        panes.add(pane)
+    }
+
+    func paneDidMeasureNaturalRows(_ pane: ReviewDiffTextPaneAppKitView, rows: [Int]) {
+        switch pane.documentPane {
+        case .old:
+            oldNaturalRows = rows
+        case .new:
+            newNaturalRows = rows
+        case .unified:
+            return
+        }
+
+        // ドキュメント差し替え直後などで両サイドの行数が食い違う間は配らない
+        // (もう一方の測定報告で必ず再計算される)。
+        guard let oldNaturalRows,
+              let newNaturalRows,
+              let targets = ReviewDiffScrollLayout.pairedRowTargets(oldNaturalRows, newNaturalRows) else {
+            return
+        }
+
+        let targetTotalRows = targets.reduce(0, +)
+        for member in panes.allObjects {
+            let natural: [Int]? = switch member.documentPane {
+            case .old: oldNaturalRows
+            case .new: newNaturalRows
+            case .unified: nil
+            }
+            guard let natural else { continue }
+            let extraRows = ReviewDiffScrollLayout.extraRows(natural: natural, target: targets)
+            // 測定報告はAppKitのレイアウトパス中に届くため、適用は次のランループへ。
+            DispatchQueue.main.async { [weak member] in
+                member?.applyRowPadding(extraRows: extraRows, targetTotalRows: targetTotalRows)
+            }
+        }
+    }
+}
+
+/// 同一ファイル内でチャンクペアごとの行高同期オブジェクトを保持する。
+@MainActor
+private final class ReviewDiffFileRowHeightSyncStore {
+    private var syncs: [Int: ReviewDiffPaneRowHeightSync] = [:]
+
+    func sync(forChunk index: Int) -> ReviewDiffPaneRowHeightSync {
+        if let existing = syncs[index] {
+            return existing
+        }
+        let sync = ReviewDiffPaneRowHeightSync()
+        syncs[index] = sync
+        return sync
+    }
+}
+
 // MARK: - Text Pane Representable
 
 private struct ReviewDiffTextPane: NSViewRepresentable {
@@ -1387,8 +1585,10 @@ private struct ReviewDiffTextPane: NSViewRepresentable {
     let syntaxHighlights: ReviewDiffSyntaxHighlights
     let wrapLines: Bool
     let horizontalSync: ReviewDiffPaneHorizontalSync?
+    let rowHeightSync: ReviewDiffPaneRowHeightSync?
     let requestCodeNavigation: (ReviewDiffCodeNavigationRequest) -> Void
     let codeNavigationHoverRange: (ReviewDiffCodeNavigationRequest) async -> NSRange?
+    let onMeasuredHeightChange: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> ReviewDiffTextPaneAppKitView {
         ReviewDiffTextPaneAppKitView()
@@ -1401,8 +1601,10 @@ private struct ReviewDiffTextPane: NSViewRepresentable {
             syntaxHighlights: syntaxHighlights,
             wrapLines: wrapLines,
             horizontalSync: horizontalSync,
+            rowHeightSync: rowHeightSync,
             requestCodeNavigation: requestCodeNavigation,
-            codeNavigationHoverRange: codeNavigationHoverRange
+            codeNavigationHoverRange: codeNavigationHoverRange,
+            onMeasuredHeightChange: onMeasuredHeightChange
         )
     }
 }
@@ -1485,10 +1687,17 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
     private var wrapLines = true
     private var minimumDocumentCodeWidth: CGFloat = 0
     private var horizontalSync: ReviewDiffPaneHorizontalSync?
+    private var rowHeightSync: ReviewDiffPaneRowHeightSync?
+    private var rowPaddingExtraRows: [Int] = []
     private var isApplyingSyncScroll = false
     private var hasReceivedDocument = false
     private var cachedIntrinsicHeight: CGFloat = ReviewDiffLayout.codeLineHeight
     private var lastMeasuredLayout: ReviewDiffScrollLayout.MeasurementSignature?
+    private var onMeasuredHeightChange: ((CGFloat) -> Void)?
+
+    var documentPane: ReviewDiffRenderedDocument.Pane {
+        document.pane
+    }
 
     override init(frame frameRect: NSRect) {
         gutterView = ReviewDiffTextGutterView(textView: textView)
@@ -1520,8 +1729,10 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         syntaxHighlights: ReviewDiffSyntaxHighlights,
         wrapLines: Bool,
         horizontalSync: ReviewDiffPaneHorizontalSync?,
+        rowHeightSync: ReviewDiffPaneRowHeightSync?,
         requestCodeNavigation: @escaping (ReviewDiffCodeNavigationRequest) -> Void,
-        codeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?
+        codeNavigationHoverRange: @escaping (ReviewDiffCodeNavigationRequest) async -> NSRange?,
+        onMeasuredHeightChange: @escaping (CGFloat) -> Void
     ) {
         // 初回update(近傍実体化直後)はコンテンツ変更ではないため、同期グループの
         // 現在の横スクロール位置を引き継ぐ(リセットすると兄弟チャンクとずれる)。
@@ -1534,15 +1745,32 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         self.wrapLines = wrapLines
         self.minimumDocumentCodeWidth = minimumCodeWidth
         self.horizontalSync = horizontalSync
+        self.rowHeightSync = rowHeightSync
+        self.onMeasuredHeightChange = onMeasuredHeightChange
         horizontalSync?.register(self)
+        rowHeightSync?.register(self)
+
+        // パディングは実測報告から再計算されるため、内容が変わったら破棄する。
+        if didChangeDocument || didChangeWrap || rowHeightSync == nil {
+            rowPaddingExtraRows = []
+        }
+
+        // シンタックスハイライト到着で attributed string が再構築されても
+        // 適用済みパディングが失われないよう、比較・設定前に織り込む。
+        var attributedString = ReviewDiffAttributedStringBuilder.attributedString(
+            for: document,
+            syntaxHighlights: syntaxHighlights
+        )
+        if !rowPaddingExtraRows.isEmpty {
+            let padded = NSMutableAttributedString(attributedString: attributedString)
+            Self.applyRowPaddingAttributes(rowPaddingExtraRows, document: document, to: padded)
+            attributedString = padded
+        }
 
         scrollView.hasHorizontalScroller = !wrapLines
         textView.update(
             document: document,
-            attributedString: ReviewDiffAttributedStringBuilder.attributedString(
-                for: document,
-                syntaxHighlights: syntaxHighlights
-            ),
+            attributedString: attributedString,
             requestCodeNavigation: requestCodeNavigation,
             codeNavigationHoverRange: codeNavigationHoverRange
         )
@@ -1646,8 +1874,15 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         if wrapLines {
             textView.isHorizontallyResizable = false
             textContainer.widthTracksTextView = true
+            // 幅追従コンテナは textView の現在の frame 幅に吸着する。no-wrap から
+            // 切り替えた直後は frame が横スクロール用の旧幅のままなので、計測前に
+            // frame 幅を確定させる。コンテナ幅も追従結果と同じ値(frame − inset×2)を
+            // 明示し、計測幅と表示幅を一致させる。
+            if abs(textView.frame.width - textWidth) > 0.5 {
+                textView.setFrameSize(NSSize(width: textWidth, height: textView.frame.height))
+            }
             textContainer.containerSize = NSSize(
-                width: textWidth,
+                width: max(1, textWidth - textView.textContainerInset.width * 2),
                 height: CGFloat.greatestFiniteMagnitude
             )
             textContainer.lineBreakMode = .byWordWrapping
@@ -1663,7 +1898,22 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
 
         textView.isVerticallyResizable = true
         layoutManager.ensureLayout(for: textContainer)
-        let usedRect = layoutManager.usedRect(for: textContainer)
+        // AppKit のレイアウトパス中は ensureLayout が完了せず usedRect が 0 を
+        // 返すことがある。glyphRange(for:) はコンテナのレイアウトを強制的に
+        // 完了させる計測イディオムで、これで再取得する。
+        var usedRect = layoutManager.usedRect(for: textContainer)
+        if usedRect.height <= 0, layoutManager.numberOfGlyphs > 0 {
+            _ = layoutManager.glyphRange(for: textContainer)
+            usedRect = layoutManager.usedRect(for: textContainer)
+        }
+        guard usedRect.height > 0 || layoutManager.numberOfGlyphs == 0 else {
+            // 計測不能。署名を保存せず、次のレイアウトパスで再計測する。
+            return
+        }
+        if wrapLines, usedRect.width > textContainer.containerSize.width + 0.5 {
+            // 旧幅(折り返し無し)のレイアウトを掴んだ。署名を保存せず再計測に回す。
+            return
+        }
         let measuredHeight = max(
             ReviewDiffLayout.codeLineHeight,
             ceil(usedRect.height + textView.textContainerInset.height * 2)
@@ -1687,7 +1937,89 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         gutterView.needsDisplay = true
 
         lastMeasuredLayout = signature
+        reportNaturalRowsIfNeeded(layoutManager: layoutManager)
         updateCachedIntrinsicHeight(measuredHeight)
+    }
+
+    /// 折り返し時の論理行ごとの実測表示行数(line fragment 数)を行高同期へ報告する。
+    /// fragment 数は注入済み paragraphSpacing の影響を受けないため、パディング適用後の
+    /// 再測定でも常に「自然な」行数が得られる。
+    private func reportNaturalRowsIfNeeded(layoutManager: NSLayoutManager) {
+        guard wrapLines, let rowHeightSync, !document.lines.isEmpty else { return }
+
+        var counts = [Int](repeating: 0, count: document.lines.count)
+        let lineStarts = document.lines.map(\.contentRange.location)
+        var lineIndex = 0
+        let fullGlyphRange = NSRange(location: 0, length: layoutManager.numberOfGlyphs)
+        layoutManager.enumerateLineFragments(forGlyphRange: fullGlyphRange) { _, _, _, glyphRange, _ in
+            let location = layoutManager.characterIndexForGlyph(at: glyphRange.location)
+            while lineIndex + 1 < lineStarts.count, location >= lineStarts[lineIndex + 1] {
+                lineIndex += 1
+            }
+            counts[lineIndex] += 1
+        }
+        rowHeightSync.paneDidMeasureNaturalRows(self, rows: counts)
+    }
+
+    /// 行高同期が計算したパディングを適用する。ペイン高さは実測ではなく
+    /// 目標総表示行数から決定的に算出する(最終段落の paragraphSpacing は
+    /// レイアウトされないため、実測に頼ると両サイドの高さが揃わない)。
+    func applyRowPadding(extraRows: [Int], targetTotalRows: Int) {
+        guard wrapLines,
+              rowHeightSync != nil,
+              extraRows.count == document.lines.count,
+              let textStorage = textView.textStorage else {
+            return
+        }
+
+        if rowPaddingExtraRows != extraRows {
+            rowPaddingExtraRows = extraRows
+            textStorage.beginEditing()
+            Self.applyRowPaddingAttributes(extraRows, document: document, to: textStorage)
+            textStorage.endEditing()
+            textView.needsDisplay = true
+            gutterView.needsDisplay = true
+        }
+
+        let paddedHeight = ReviewDiffScrollLayout.estimatedDocumentHeight(
+            rowCount: targetTotalRows,
+            lineHeight: ReviewDiffLayout.codeLineHeight,
+            textInsetHeight: textView.textContainerInset.height
+        )
+        if abs(textView.frame.height - paddedHeight) > 0.5 {
+            textView.setFrameSize(NSSize(width: textView.frame.width, height: paddedHeight))
+        }
+        updateCachedIntrinsicHeight(paddedHeight)
+    }
+
+    /// 各論理行の段落に不足行数ぶんの paragraphSpacing を設定する(0行は解除)。
+    /// 行高固定(minimum==maximumLineHeight)のため spacing は折り返し位置に影響しない。
+    private static func applyRowPaddingAttributes(
+        _ extraRows: [Int],
+        document: ReviewDiffRenderedDocument,
+        to attributedString: NSMutableAttributedString
+    ) {
+        let string = attributedString.string as NSString
+        for (index, line) in document.lines.enumerated() {
+            let contentRange = line.contentRange.clamped(toUTF16Length: string.length)
+            guard contentRange.location < string.length else { continue }
+            let paragraphRange = string.paragraphRange(for: contentRange)
+            guard paragraphRange.length > 0,
+                  let existingStyle = attributedString.attribute(
+                      .paragraphStyle,
+                      at: paragraphRange.location,
+                      effectiveRange: nil
+                  ) as? NSParagraphStyle,
+                  let style = existingStyle.mutableCopy() as? NSMutableParagraphStyle else {
+                continue
+            }
+
+            let extra = index < extraRows.count ? extraRows[index] : 0
+            let spacing = CGFloat(extra) * ReviewDiffLayout.codeLineHeight
+            guard abs(existingStyle.paragraphSpacing - spacing) > 0.5 else { continue }
+            style.paragraphSpacing = spacing
+            attributedString.addAttribute(.paragraphStyle, value: style, range: paragraphRange)
+        }
     }
 
     func applySyncedHorizontalOrigin(_ originX: CGFloat) {
@@ -1705,7 +2037,7 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
 
     private func estimatedDocumentHeight() -> CGFloat {
         ReviewDiffScrollLayout.estimatedDocumentHeight(
-            lineCount: document.lineCount,
+            rowCount: document.estimatedRowCount,
             lineHeight: ReviewDiffLayout.codeLineHeight,
             textInsetHeight: ReviewDiffLayout.textContainerInset.height
         )
@@ -1715,6 +2047,15 @@ private final class ReviewDiffTextPaneAppKitView: NSView {
         guard abs(cachedIntrinsicHeight - height) > 0.5 else { return }
         cachedIntrinsicHeight = height
         invalidateIntrinsicContentSize()
+
+        // SwiftUI は NSViewRepresentable の intrinsic 変化を自動では再取得しない
+        // (折り返しで増えた実測高が反映されず下部が欠けていた)。実測高は必ず
+        // コールバックで SwiftUI 側の frame に伝搬する。レイアウトパス中の
+        // state 更新を避けるため次のランループへ回す。
+        let onMeasuredHeightChange = onMeasuredHeightChange
+        DispatchQueue.main.async {
+            onMeasuredHeightChange?(height)
+        }
     }
 
     @objc private func clipViewBoundsDidChange(_ notification: Notification) {
@@ -1846,10 +2187,7 @@ private final class ReviewDiffTextGutterView: NSView {
     }
 
     var calculatedRuleThickness: CGFloat {
-        let columns = CGFloat(document.pane.gutterColumnCount)
-        return columns * ReviewDiffLayout.lineNumberColumnWidth
-            + ReviewDiffLayout.markerWidth
-            + 8
+        ReviewDiffLayout.gutterWidth(gutterColumnCount: document.pane.gutterColumnCount)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1921,7 +2259,7 @@ private final class ReviewDiffTextGutterView: NSView {
         layoutManager: NSLayoutManager,
         textContainer: NSTextContainer
     ) {
-        guard let rect = visualRects(
+        guard var rect = visualRects(
             for: line,
             in: textView,
             layoutManager: layoutManager,
@@ -1930,6 +2268,9 @@ private final class ReviewDiffTextGutterView: NSView {
             return
         }
         guard rect.intersects(dirtyRect) else { return }
+        // 行高パディング(paragraphSpacing)は fragment rect の高さ側に含まれるため、
+        // 行番号・マーカーは論理行の先頭表示行の高さに収めて描く。
+        rect.size.height = min(rect.height, ReviewDiffLayout.codeLineHeight)
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(

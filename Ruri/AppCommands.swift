@@ -15,6 +15,7 @@ struct AppCommands: Commands {
     @FocusedObject private var lineWrappingSettings: EditorLineWrappingSettingsStore?
     @FocusedValue(\.ruriOpenFolderCommandAction) private var openFolderCommandAction
     @FocusedValue(\.ruriToggleTerminalOverviewCommandAction) private var toggleTerminalOverviewCommandAction
+    @FocusedValue(\.ruriToggleReviewZenCommandAction) private var toggleReviewZenCommandAction
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
@@ -170,6 +171,14 @@ struct AppCommands: Commands {
                 )
             )
             .disabled(lineWrappingSettings == nil)
+
+            Divider()
+
+            Button(AppText.reviewZenModeCommand) {
+                toggleReviewZenCommandAction?()
+            }
+            .keyboardShortcut("j", modifiers: [.command, .shift])
+            .disabled(toggleReviewZenCommandAction == nil)
         }
 
         CommandMenu(AppText.terminalCommandMenu) {

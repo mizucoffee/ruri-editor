@@ -21,6 +21,7 @@ struct ContentView: View {
     @ObservedObject var paneFocus: PaneFocusStore
     @Binding var isImporterPresented: Bool
     @Binding var isWorktreeOverviewVisible: Bool
+    @Binding var sidebarVisibility: NavigationSplitViewVisibility
     let openProjectInNewWindow: (URL) -> Void
     @StateObject private var fileSearch = ProjectFileSearchViewModel()
     @StateObject private var codeUsage = CodeUsageViewModel()
@@ -286,7 +287,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
             projectSidebar
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         } detail: {
@@ -971,6 +972,7 @@ private struct FileTreeDeletionAlertModifier: ViewModifier {
         paneFocus: PaneFocusStore(),
         isImporterPresented: .constant(false),
         isWorktreeOverviewVisible: .constant(true),
+        sidebarVisibility: .constant(.automatic),
         openProjectInNewWindow: { _ in }
     )
 }

@@ -650,7 +650,7 @@ final class EditorRuntimeStoreTests: XCTestCase {
                 - [docs](https://example.com)
 
                 """,
-                ["# Ruri", "`editor`", "[docs]", "https://example.com"],
+                ["Ruri", "`editor`", "[docs]", "https://example.com"],
                 2
             ),
             (

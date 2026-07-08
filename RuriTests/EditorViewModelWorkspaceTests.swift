@@ -2615,6 +2615,44 @@ final class EditorViewModelWorkspaceTests: XCTestCase {
         XCTAssertEqual(thirdNode.children?.map(\.name), ["Leaf.txt"])
     }
 
+    func testExternalRenameInNestedExpandedDirectoryRefreshesTree() async throws {
+        let rootURL = try makeTemporaryDirectory()
+        defer { try? fileManager.removeItem(at: rootURL) }
+
+        let outerURL = rootURL.appending(path: "Outer")
+        let innerURL = outerURL.appending(path: "Inner")
+        let oldURL = innerURL.appending(path: "Old.txt")
+        let newURL = innerURL.appending(path: "New.txt")
+        try fileManager.createDirectory(at: innerURL, withIntermediateDirectories: true)
+        try "content".write(to: oldURL, atomically: true, encoding: .utf8)
+
+        let editor = EditorViewModel(isFileWatchingEnabled: false)
+
+        await editor.openProject(rootURL)
+        await editor.toggleDirectory(outerURL)
+
+        let expandedInnerNode = try XCTUnwrap(editor.fileTree.first?.children?.first)
+        XCTAssertTrue(expandedInnerNode.isExpanded)
+        XCTAssertEqual(expandedInnerNode.children?.map(\.name), ["Old.txt"])
+
+        try fileManager.moveItem(at: oldURL, to: newURL)
+
+        await editor.handleExternalProjectChange(ProjectFileWatcher.Change(
+            rootURL: rootURL.standardizedFileURL,
+            dirtyFilePaths: [
+                oldURL.path(percentEncoded: false),
+                newURL.path(percentEncoded: false)
+            ],
+            dirtyDirectoryPaths: [innerURL.path(percentEncoded: false)]
+        ))
+
+        let outerNode = try XCTUnwrap(editor.fileTree.first)
+        let innerNode = try XCTUnwrap(outerNode.children?.first)
+        XCTAssertTrue(outerNode.isExpanded)
+        XCTAssertTrue(innerNode.isExpanded)
+        XCTAssertEqual(innerNode.children?.map(\.name), ["New.txt"])
+    }
+
     func testToggleDirectoryDoesNotChainWhenDirectoryContainsAFile() async throws {
         let rootURL = try makeTemporaryDirectory()
         defer { try? fileManager.removeItem(at: rootURL) }

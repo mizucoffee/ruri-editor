@@ -74,6 +74,7 @@ enum AppText {
     static let goToImplementationCommand: LocalizedStringKey = "Go to Symbol or Usages"
     static let editorCommandMenu: LocalizedStringKey = "Editor"
     static let lineWrapCommand: LocalizedStringKey = "Line Wrap"
+    static let reviewZenModeCommand: LocalizedStringKey = "Review Zen Mode"
     static let navigationCommandMenu: LocalizedStringKey = "Navigate"
     static let navigateBackCommand: LocalizedStringKey = "Back"
     static let navigateForwardCommand: LocalizedStringKey = "Forward"

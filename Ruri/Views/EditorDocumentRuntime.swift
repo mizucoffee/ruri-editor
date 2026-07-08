@@ -1458,7 +1458,8 @@ final class EditorDocumentRuntime: NSObject, NSTextViewDelegate {
             attributes[.font] = NSFontManager.shared.convert(editorFont, toHaveTrait: .italicFontMask)
         case .keyword, .type, .tag:
             attributes[.font] = NSFontManager.shared.convert(editorFont, toHaveTrait: .boldFontMask)
-        case .string, .number, .function, .property, .operator, .punctuation, .attribute, .constant, .variable:
+        case .string, .number, .function, .property, .operator, .punctuation, .attribute, .annotation,
+             .constant, .variable:
             break
         }
 

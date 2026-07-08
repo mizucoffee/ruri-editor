@@ -9,22 +9,28 @@ import XCTest
 // text → role → 色 の2段のうち後段(role → 色)を固定するテスト。前段(text → role)は
 // SyntaxHighlightingServiceTests のスナップショットが固定する。
 final class EditorSyntaxHighlightPaletteTests: XCTestCase {
-    // SyntaxHighlightRole は CaseIterable ではないため、全13 role をここに列挙して網羅を固定する。
+    // SyntaxHighlightRole は CaseIterable ではないため、全14 role をこの2表に列挙して網羅を固定する。
     // role が増減したらこの表とパレット両方の更新が必要になる。
+    // 配色は IntelliJ Light (light) / IntelliJ New UI Dark (dark) 準拠。
     private static let expectedColors: [(role: SyntaxHighlightRole, light: UInt32, dark: UInt32)] = [
-        (.keyword, 0xA626A4, 0xC678DD),
-        (.type, 0xC18401, 0xE5C07B),
-        (.string, 0x50A14F, 0x98C379),
-        (.number, 0x986801, 0xD19A66),
-        (.comment, 0x7F848E, 0x7F848E),
-        (.function, 0x4078F2, 0x61AFEF),
-        (.property, 0xE45649, 0xE06C75),
-        (.operator, 0x383A42, 0xABB2BF),
-        (.punctuation, 0x383A42, 0xABB2BF),
-        (.tag, 0xE45649, 0xE06C75),
-        (.attribute, 0x986801, 0xD19A66),
-        (.constant, 0x0184BC, 0x56B6C2),
-        (.variable, 0x383A42, 0xABB2BF)
+        (.keyword, 0x0033B3, 0xCF8E6D),
+        (.string, 0x067D17, 0x6AAB73),
+        (.number, 0x1750EB, 0x2AACB8),
+        (.comment, 0x8C8C8C, 0x7A7E85),
+        (.function, 0x00627A, 0x56A8F5),
+        (.property, 0x871094, 0xC77DBB),
+        (.tag, 0x0033B3, 0xD5B778),
+        (.attribute, 0x174AD4, 0xBDBDBD),
+        (.annotation, 0x9E880D, 0xB3AE60),
+        (.constant, 0x871094, 0xC77DBB)
+    ]
+
+    // IntelliJ が色付けしない role。パレットに定義されず .labelColor に落ちる。
+    private static let defaultColorRoles: [SyntaxHighlightRole] = [
+        .type,
+        .variable,
+        .operator,
+        .punctuation
     ]
 
     // MARK: - color(for:themeName:)
@@ -43,15 +49,24 @@ final class EditorSyntaxHighlightPaletteTests: XCTestCase {
         }
     }
 
+    func testDefaultColorRolesFallBackToLabelColorInBothThemes() {
+        for role in Self.defaultColorRoles {
+            for themeName in ["tree-sitter-light", "tree-sitter-dark"] {
+                let color = SyntaxHighlightPalette.color(for: role, themeName: themeName)
+                XCTAssertEqual(color, .labelColor, "\(themeName) \(role.rawValue)")
+            }
+        }
+    }
+
     func testUnknownThemeNameFallsBackToLightPalette() throws {
         let color = SyntaxHighlightPalette.color(for: .keyword, themeName: "solarized")
-        try assertColor(color, matchesHex: 0xA626A4, message: "unknown theme keyword")
+        try assertColor(color, matchesHex: 0x0033B3, message: "unknown theme keyword")
     }
 
     func testThemeNameContainingDarkSelectsDarkPalette() throws {
         // テーマ判定は "dark" の部分文字列一致(実装仕様の固定)。
         let color = SyntaxHighlightPalette.color(for: .keyword, themeName: "my-dark-theme")
-        try assertColor(color, matchesHex: 0xC678DD, message: "substring dark keyword")
+        try assertColor(color, matchesHex: 0xCF8E6D, message: "substring dark keyword")
     }
 
     // MARK: - SyntaxHighlightingService.themeName(for:)

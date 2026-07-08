@@ -492,7 +492,13 @@ struct ProjectTreeState {
             }
             let preservedChildren = previousState?.isExpanded == true
                 || previousState?.isLoadingChildren == true
-                ? previousState?.node.children
+                ? previousState?.node.children.map {
+                    appliedSnapshotNodes(
+                        $0,
+                        childrenByPath: childrenByPath,
+                        directoryStates: directoryStates
+                    )
+                }
                 : nil
 
             return FileNode(
@@ -505,5 +511,37 @@ struct ProjectTreeState {
                 isIgnored: node.isIgnored
             )
         })
+    }
+
+    // Applies fresh snapshots to a preserved subtree whose own parent listing was
+    // not reloaded; nodes without a snapshot are kept as-is, including cached
+    // children of collapsed directories.
+    private static func appliedSnapshotNodes(
+        _ nodes: [FileNode],
+        childrenByPath: [String: [FileNode]],
+        directoryStates: [String: DirectoryState]
+    ) -> [FileNode] {
+        nodes.map { node in
+            guard node.isDirectory else { return node }
+
+            var updated = node
+            let path = FileURLRewriter.normalizedPath(node.url)
+            if let freshChildren = childrenByPath[path] {
+                updated.children = refreshedNodes(
+                    freshChildren,
+                    childrenByPath: childrenByPath,
+                    directoryStates: directoryStates
+                )
+            } else {
+                updated.children = node.children.map {
+                    appliedSnapshotNodes(
+                        $0,
+                        childrenByPath: childrenByPath,
+                        directoryStates: directoryStates
+                    )
+                }
+            }
+            return updated
+        }
     }
 }

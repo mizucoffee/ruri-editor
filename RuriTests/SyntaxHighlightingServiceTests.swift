@@ -32,8 +32,10 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
     // greeting
     public class Greeter {
         private static final int COUNT = 2;
+        private String suffix = "!";
+        @Override
         String greet(String name) {
-            return "Hello, " + name;
+            return "Hello, " + trim(name) + this.suffix;
         }
     }
     """
@@ -47,25 +49,36 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             12:6 keyword «public»
             19:5 keyword «class»
             25:7 type «Greeter»
-            25:7 variable «Greeter»
             39:7 keyword «private»
             47:6 keyword «static»
             54:5 keyword «final»
-            60:3 type «int»
+            60:3 keyword «int»
+            64:5 property «COUNT»
             64:5 constant «COUNT»
-            64:5 variable «COUNT»
             72:1 number «2»
-            79:6 type «String»
-            86:5 variable «greet»
-            86:5 function «greet»
-            92:6 type «String»
-            99:4 variable «name»
-            115:6 keyword «return»
-            122:9 string «"Hello, "»
-            134:4 variable «name»
+            79:7 keyword «private»
+            87:6 type «String»
+            94:6 property «suffix»
+            103:3 string «"!"»
+            112:1 annotation «@»
+            113:8 annotation «Override»
+            126:6 type «String»
+            133:5 function «greet»
+            139:6 type «String»
+            162:6 keyword «return»
+            169:9 string «"Hello, "»
+            194:4 keyword «this»
+            199:6 property «suffix»
             """
         )
-        XCTAssertTrue(result.roles.isSuperset(of: [.comment, .keyword, .type, .number, .string, .function]))
+        // 自前 Java クエリ(IntelliJ 準拠): メソッドは宣言のみ function(呼び出し trim は無色)、
+        // フィールド宣言と this.x アクセスは property、ALL_CAPS は constant、アノテーションは
+        // annotation、プリミティブ型と this は keyword。識別子の使用箇所は capture しない。
+        XCTAssertTrue(
+            result.roles.isSuperset(
+                of: [.comment, .keyword, .type, .number, .string, .function, .property, .constant, .annotation]
+            )
+        )
     }
 
     // MARK: - JavaScript
@@ -203,7 +216,6 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             41:1 operator «+»
             43:1 number «2»
             45:7 variable «println»
-            45:7 function «println»
             53:17 string «"total: ${total}"»
             54:7 string «total: »
             63:5 variable «total»
@@ -229,18 +241,15 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             result.snapshot,
             """
             0:7 variable «plugins»
-            0:7 function «plugins»
             14:2 variable «id»
-            14:2 function «id»
             17:6 string «'java'»
             26:12 variable «dependencies»
-            26:12 function «dependencies»
             45:14 variable «implementation»
-            45:14 function «implementation»
             60:28 string «'org.slf4j:slf4j-api:2.0.13'»
             """
         )
-        XCTAssertTrue(result.roles.isSuperset(of: [.string, .function]))
+        // メソッド呼び出し(@function.call)は IntelliJ 流儀でデフォルト色(role なし)になる。
+        XCTAssertTrue(result.roles.isSuperset(of: [.string, .variable]))
     }
 
     // MARK: - TypeScript
@@ -326,7 +335,7 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             33:1 number «2»
             38:8 string «"stable"»
             38:8 string «"stable"»
-            48:4 constant «true»
+            48:4 keyword «true»
             56:6 string «"tags"»
             56:6 string «"tags"»
             65:8 string «"editor"»
@@ -334,7 +343,8 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             """
         )
         // JSON の highlight query は区切り記号({}[]:,)を capture しないため punctuation は現れない。
-        XCTAssertTrue(result.roles.isSuperset(of: [.string, .number, .constant]))
+        // true/false/null は IntelliJ 流儀でキーワード色。
+        XCTAssertTrue(result.roles.isSuperset(of: [.string, .number, .keyword]))
     }
 
     // MARK: - JSONL(拡張子 .jsonl は resolver が "json" に解決する)
@@ -385,11 +395,11 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             result.snapshot,
             """
             0:1 punctuation «#»
-            2:5 type «Title»
+            2:5 keyword «Title»
             61:2 punctuation «- »
             """
         )
-        XCTAssertTrue(result.roles.isSuperset(of: [.type, .punctuation]))
+        XCTAssertTrue(result.roles.isSuperset(of: [.keyword, .punctuation]))
     }
 
     // MARK: - YAML
@@ -420,7 +430,7 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             29:6 string «stable»
             29:6 property «stable»
             35:1 punctuation «:»
-            37:4 constant «true»
+            37:4 keyword «true»
             42:4 string «tags»
             42:4 property «tags»
             46:1 punctuation «:»
@@ -428,7 +438,7 @@ final class SyntaxHighlightingServiceTests: XCTestCase {
             52:6 string «editor»
             """
         )
-        XCTAssertTrue(result.roles.isSuperset(of: [.comment, .property, .number, .constant, .punctuation]))
+        XCTAssertTrue(result.roles.isSuperset(of: [.comment, .property, .number, .keyword, .punctuation]))
     }
 
     // MARK: - CSS

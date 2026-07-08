@@ -35,7 +35,9 @@ JUnit 5(`useJUnitPlatform()`)。PR時は `.github/workflows/verify.yml` の `jav
 
 ## アプリ側からの利用
 
-`Ruri/Services/JavaSymbolResolverClient.swift` がapp bundle内の `Tools/` → `Resources/Tools/` → bundle rootの順で `java-symbol-resolver.jar` を解決し、`java -Xmx512m -jar` で起動する。JARが見つからない場合はエラーになるため、シンボルジャンプ関連の動作確認前に上記のビルドを行う。
+`Ruri/Services/JavaSymbolResolverClient.swift` がapp bundle内の `Tools/` → `Resources/Tools/` → bundle rootの順で `java-symbol-resolver.jar` を解決し、`java -Xmx<N>m -jar` で起動する。ヒープ上限は物理メモリの1/4を1024–4096MBにクランプした値(`JavaResolverHeapLimit`)。JARが見つからない場合はエラーになるため、シンボルジャンプ関連の動作確認前に上記のビルドを行う。
+
+`OutOfMemoryError` 発生時は当該リクエストへのエラー応答を書き出した後、終了コード3(`Main.EXIT_CODE_OUT_OF_MEMORY`、Swift側の `outOfMemoryExitCode` と対応)でプロセスを終了する。クライアントは次のリクエストで自動的に再起動する。
 
 ## 構成
 

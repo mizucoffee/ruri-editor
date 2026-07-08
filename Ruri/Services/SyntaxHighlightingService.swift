@@ -21,6 +21,7 @@ enum SyntaxHighlightRole: String, Sendable {
     case punctuation
     case tag
     case attribute
+    case annotation
     case constant
     case variable
 }
@@ -102,7 +103,7 @@ private actor TreeSitterSyntaxHighlightingWorker {
             .resolve(with: Predicate.Context(string: text))
             .highlights()
 
-        return normalizedRuns(from: ranges, textUTF16Length: text.utf16.count)
+        return normalizedRuns(from: ranges, textUTF16Length: text.utf16.count, languageName: languageName)
     }
 
     private func languageConfiguration(for languageName: String) -> TreeSitterLanguageConfiguration? {
@@ -152,6 +153,12 @@ private actor TreeSitterSyntaxHighlightingWorker {
     private func makeQuery(for configuration: TreeSitterLanguageConfiguration) -> Query? {
         switch configuration {
         case .codeEdit(let codeLanguage):
+            // Java はパッケージ同梱クエリだと宣言/呼び出し・フィールド・アノテーションを
+            // 区別できないため、自前クエリで上書きする。
+            if codeLanguage.id == .java {
+                return makeQuery(language: codeLanguage.language, source: Self.javaHighlightQuery)
+            }
+
             if let query = TreeSitterModel.shared.query(for: codeLanguage.id) {
                 return query
             }
@@ -173,9 +180,16 @@ private actor TreeSitterSyntaxHighlightingWorker {
         return try? Query(language: language, data: data)
     }
 
-    private func normalizedRuns(from ranges: [NamedRange], textUTF16Length: Int) -> [SyntaxHighlightRun] {
+    private func normalizedRuns(
+        from ranges: [NamedRange],
+        textUTF16Length: Int,
+        languageName: String
+    ) -> [SyntaxHighlightRun] {
         ranges.compactMap { range in
-            guard let role = SyntaxHighlightRole(captureNameComponents: range.nameComponents) else {
+            guard let role = SyntaxHighlightRole(
+                captureNameComponents: range.nameComponents,
+                languageName: languageName
+            ) else {
                 return nil
             }
 
@@ -193,6 +207,115 @@ private actor TreeSitterSyntaxHighlightingWorker {
             )
         }
     }
+
+    // IntelliJ 準拠の色分けのための自前 Java クエリ。同梱クエリとの差分:
+    // メソッドは宣言のみ色付け(呼び出しは capture しない)、フィールド/enum 定数を @property/@constant、
+    // アノテーションを @annotation、プリミティブ型と this/super をキーワード扱いにする。
+    private static let javaHighlightQuery = """
+    (line_comment) @comment
+    (block_comment) @comment
+
+    [
+      (hex_integer_literal)
+      (decimal_integer_literal)
+      (octal_integer_literal)
+      (decimal_floating_point_literal)
+      (hex_floating_point_literal)
+    ] @number
+
+    [
+      (character_literal)
+      (string_literal)
+    ] @string
+    (escape_sequence) @string
+
+    [
+      (true)
+      (false)
+      (null_literal)
+    ] @constant.builtin
+
+    (method_declaration name: (identifier) @function)
+
+    (marker_annotation "@" @annotation name: [(identifier) (scoped_identifier)] @annotation)
+    (annotation "@" @annotation name: [(identifier) (scoped_identifier)] @annotation)
+
+    (field_declaration declarator: (variable_declarator name: (identifier) @property))
+    (field_access field: (identifier) @property)
+    (enum_constant name: (identifier) @constant)
+
+    ((identifier) @constant
+     (#match? @constant "^_*[A-Z][A-Z\\\\d_]+$"))
+
+    (type_identifier) @type
+    (interface_declaration name: (identifier) @type)
+    (class_declaration name: (identifier) @type)
+    (enum_declaration name: (identifier) @type)
+    (constructor_declaration name: (identifier) @type)
+
+    [
+      (boolean_type)
+      (integral_type)
+      (floating_point_type)
+      (void_type)
+    ] @keyword
+
+    (this) @keyword
+    (super) @keyword
+
+    [
+      "abstract"
+      "assert"
+      "break"
+      "case"
+      "catch"
+      "class"
+      "continue"
+      "default"
+      "do"
+      "else"
+      "enum"
+      "exports"
+      "extends"
+      "final"
+      "finally"
+      "for"
+      "if"
+      "implements"
+      "import"
+      "instanceof"
+      "interface"
+      "module"
+      "native"
+      "new"
+      "non-sealed"
+      "open"
+      "opens"
+      "package"
+      "private"
+      "protected"
+      "provides"
+      "public"
+      "requires"
+      "record"
+      "return"
+      "sealed"
+      "static"
+      "strictfp"
+      "switch"
+      "synchronized"
+      "throw"
+      "throws"
+      "to"
+      "transient"
+      "transitive"
+      "try"
+      "uses"
+      "volatile"
+      "while"
+      "with"
+    ] @keyword
+    """
 
     private static let groovyHighlightQuery = """
     (line_comment) @comment
@@ -319,14 +442,14 @@ private actor TreeSitterSyntaxHighlightingWorker {
     (command_chain receiver: (identifier) @function.call)
 
     (type_identifier) @type
-    (annotation "@" @attribute name: (qualified_name) @attribute)
+    (annotation "@" @annotation name: (qualified_name) @annotation)
     """
 
     private static let swiftHighlightQuery = """
     [ "." ";" ":" "," ] @punctuation.delimiter
     [ "\\(" "(" ")" "[" "]" "{" "}" ] @punctuation.bracket
 
-    (attribute) @attribute
+    (attribute) @annotation
     (type_identifier) @type
     (self_expression) @variable.builtin
 
@@ -407,8 +530,8 @@ private actor TreeSitterSyntaxHighlightingWorker {
       (bin_literal)
     ] @number
     (real_literal) @number
-    (boolean_literal) @constant
-    "nil" @constant
+    (boolean_literal) @constant.builtin
+    "nil" @constant.builtin
     (regex_literal) @string
 
     (custom_operator) @operator
@@ -461,7 +584,7 @@ private enum TreeSitterLanguageConfiguration {
 }
 
 private extension SyntaxHighlightRole {
-    nonisolated init?(captureNameComponents: [String]) {
+    nonisolated init?(captureNameComponents: [String], languageName: String) {
         guard let firstComponent = captureNameComponents.first else {
             return nil
         }
@@ -469,7 +592,7 @@ private extension SyntaxHighlightRole {
         switch firstComponent {
         case "comment":
             self = .comment
-        case "string", "escape":
+        case "string", "escape", "character":
             self = .string
         case "number", "float":
             self = .number
@@ -480,7 +603,8 @@ private extension SyntaxHighlightRole {
         case "text":
             switch captureNameComponents.dropFirst().first {
             case "title":
-                self = .type
+                // markdown 見出し。IntelliJ はキーワード系の色 + 太字で表示する。
+                self = .keyword
             case "literal":
                 self = .string
             case "uri", "reference":
@@ -489,6 +613,10 @@ private extension SyntaxHighlightRole {
                 self = .variable
             }
         case "function", "method":
+            // IntelliJ 流儀では呼び出しはデフォルト色。宣言(と区別のないクエリの capture)のみ色付け。
+            guard captureNameComponents.dropFirst().first != "call" else {
+                return nil
+            }
             self = .function
         case "property", "field":
             self = .property
@@ -498,11 +626,20 @@ private extension SyntaxHighlightRole {
             self = .punctuation
         case "tag":
             self = .tag
+        case "annotation":
+            self = .annotation
         case "attribute":
-            self = .attribute
+            // Kotlin の同梱クエリはアノテーションを @attribute で capture する。
+            // HTML/XML/CSS などの属性と色を分けるためここで振り分ける。
+            self = languageName == "kotlin" ? .annotation : .attribute
         case "label":
             self = .attribute
-        case "constant", "boolean", "null", "character", "symbol":
+        case "constant":
+            // constant.builtin(true/false/null など)は IntelliJ ではキーワード色。
+            self = captureNameComponents.dropFirst().first == "builtin" ? .keyword : .constant
+        case "boolean", "null":
+            self = .keyword
+        case "symbol":
             self = .constant
         case "variable", "identifier", "parameter":
             self = .variable

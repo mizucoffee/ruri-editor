@@ -87,6 +87,57 @@ final class PaneFocusStore: ObservableObject {
         reclassify()
     }
 
+    func lockFirstResponderToReviewDiff() {
+        let captured = currentReviewDiffResponderView()
+        assertReviewDiffFirstResponder(captured: captured)
+        DispatchQueue.main.async { [weak self] in
+            self?.assertReviewDiffFirstResponder(captured: captured)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reviewZenFocusRestoreDelay) { [weak self] in
+            self?.assertReviewDiffFirstResponder(captured: captured)
+        }
+    }
+
+    private static let reviewZenFocusRestoreDelay: TimeInterval = 0.3
+
+    private func currentReviewDiffResponderView() -> NSView? {
+        guard let window,
+              let view = window.firstResponder as? NSView,
+              let host = reviewDiffHostView(),
+              view.isDescendant(of: host) else {
+            return nil
+        }
+        return view
+    }
+
+    private func assertReviewDiffFirstResponder(captured: NSView?) {
+        guard let window, let host = reviewDiffHostView() else { return }
+        if let responder = window.firstResponder as? NSView, responder.isDescendant(of: host) {
+            return
+        }
+        if let captured, captured.window === window {
+            window.makeFirstResponder(captured)
+            return
+        }
+        if let target = Self.firstFocusableDescendant(of: host) {
+            window.makeFirstResponder(target)
+        }
+    }
+
+    static func firstFocusableDescendant(of root: NSView) -> NSView? {
+        var queue = root.subviews
+        var index = 0
+        while index < queue.count {
+            let view = queue[index]
+            index += 1
+            if view.acceptsFirstResponder {
+                return view
+            }
+            queue.append(contentsOf: view.subviews)
+        }
+        return nil
+    }
+
     func engageFileTree() {
         isFileTreeEngaged = true
         reclassify()

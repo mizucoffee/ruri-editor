@@ -96,19 +96,39 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
         id: String,
         continuation: CheckedContinuation<JavaSymbolResolverResponse, Error>
     ) {
-        pending[id] = continuation
-
-        guard let stdinPipe else {
-            pending.removeValue(forKey: id)?.resume(
-                throwing: JavaSymbolResolverError(message: "Java symbol resolver is not running.")
-            )
+        do {
+            try writeRestartingIfNeeded(data)
+        } catch {
+            continuation.resume(throwing: error)
             return
+        }
+        // 応答処理はactor経由で直列化されるため、書き込み成功後の登録でも
+        // 応答が先に処理されることはない。
+        pending[id] = continuation
+    }
+
+    private func writeRestartingIfNeeded(_ data: Data) throws {
+        if stdinPipe == nil {
+            try ensureStarted()
+        }
+        guard let handle = stdinPipe?.fileHandleForWriting else {
+            throw JavaSymbolResolverError(message: "Java symbol resolver is not running.")
         }
 
         do {
-            try stdinPipe.fileHandleForWriting.write(contentsOf: data)
+            try handle.write(contentsOf: data)
         } catch {
-            pending.removeValue(forKey: id)?.resume(throwing: error)
+            // 終了直後でisRunningがまだtrueのプロセスをensureStartedが再利用すると、
+            // 閉じたstdinへの書き込みがEPIPEになる。古いプロセスを破棄して一度だけ
+            // 再起動・再送する。
+            stopProcess(error: JavaSymbolResolverError(
+                message: "Java symbol resolver exited before accepting the request."
+            ))
+            try ensureStarted()
+            guard let retryHandle = stdinPipe?.fileHandleForWriting else {
+                throw JavaSymbolResolverError(message: "Java symbol resolver is not running.")
+            }
+            try retryHandle.write(contentsOf: data)
         }
     }
 
@@ -135,7 +155,10 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
         let stderrPipe = Pipe()
 
         process.executableURL = javaExecutableURL
-        process.arguments = ["-Xmx512m", "-jar", jarURL.path(percentEncoded: false)]
+        process.arguments = [JavaResolverHeapLimit.xmxArgument(), "-jar", jarURL.path(percentEncoded: false)]
+        // 終了直後のプロセスのstdinへの書き込みでSIGPIPEを受けてアプリごと
+        // 落ちないよう、書き込みエラー(EPIPE)として受け取る。
+        _ = fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
@@ -160,7 +183,7 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
         }
         process.terminationHandler = { [weak self] process in
             Task {
-                await self?.handleTermination(exitCode: process.terminationStatus)
+                await self?.handleTermination(of: process, exitCode: process.terminationStatus)
             }
         }
 
@@ -216,7 +239,20 @@ actor JavaSymbolResolverClient: JavaSymbolResolving {
         }
     }
 
-    private func handleTermination(exitCode: Int32) {
+    // Java側(Main.EXIT_CODE_OUT_OF_MEMORY)と対応する契約値。リゾルバはOOM時に
+    // エラー応答を書いてからこのコードで終了し、次回resolveで再起動される。
+    private static let outOfMemoryExitCode: Int32 = 3
+
+    private func handleTermination(of terminatedProcess: Process, exitCode: Int32) {
+        // 旧プロセスの終了通知が新プロセスの起動後に届くことがある(OOM直後の
+        // 再要求など)。現行プロセスのものでなければ、再起動済みの状態を壊さない。
+        guard terminatedProcess === process else { return }
+        if exitCode == Self.outOfMemoryExitCode {
+            stopProcess(error: JavaSymbolResolverError(
+                message: "Java symbol resolver ran out of memory. It will restart on the next request."
+            ))
+            return
+        }
         let stderr = String(data: stderrBuffer, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let suffix = stderr?.isEmpty == false ? ": \(stderr ?? "")" : "."
@@ -265,6 +301,24 @@ nonisolated struct JavaSymbolResolverBundle: Sendable {
             bundle.url(forResource: "java-symbol-resolver", withExtension: "jar")
         ]
         return candidates.compactMap(\.self).first
+    }
+}
+
+nonisolated struct JavaResolverHeapLimit: Sendable {
+    // 大きいプロジェクトの参照検索でも足りるよう物理メモリの1/4を割り当てる。
+    // Xmxは上限指定であって予約ではないため、小メモリ機でも安全。
+    static let minimumMegabytes = 1024
+    static let maximumMegabytes = 4096
+
+    static func megabytes(physicalMemoryBytes: UInt64) -> Int {
+        let quarterMegabytes = physicalMemoryBytes / 4 / 1_048_576
+        return min(max(Int(clamping: quarterMegabytes), minimumMegabytes), maximumMegabytes)
+    }
+
+    static func xmxArgument(
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) -> String {
+        "-Xmx\(megabytes(physicalMemoryBytes: physicalMemoryBytes))m"
     }
 }
 

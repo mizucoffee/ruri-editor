@@ -282,3 +282,36 @@ final class PaneFocusStoreClassifyTests: XCTestCase {
         )
     }
 }
+
+private final class FocusableTestView: NSView {
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+}
+
+final class PaneFocusStoreFocusableDescendantTests: XCTestCase {
+    func testFindsNestedFocusableDescendant() {
+        let root = NSView()
+        let sibling = NSView()
+        let intermediate = NSView()
+        let focusable = FocusableTestView()
+        root.addSubview(sibling)
+        root.addSubview(intermediate)
+        intermediate.addSubview(focusable)
+
+        XCTAssertTrue(PaneFocusStore.firstFocusableDescendant(of: root) === focusable)
+    }
+
+    func testDoesNotReturnRootItself() {
+        let root = FocusableTestView()
+
+        XCTAssertNil(PaneFocusStore.firstFocusableDescendant(of: root))
+    }
+
+    func testReturnsNilWithoutFocusableDescendant() {
+        let root = NSView()
+        root.addSubview(NSView())
+
+        XCTAssertNil(PaneFocusStore.firstFocusableDescendant(of: root))
+    }
+}

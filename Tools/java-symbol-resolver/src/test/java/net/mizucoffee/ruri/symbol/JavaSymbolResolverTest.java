@@ -275,6 +275,52 @@ final class JavaSymbolResolverTest {
         assertEquals(sourceText.indexOf("Target"), response.hoverRange().location());
     }
 
+    @Test
+    void resolveClearsJavaParserFacadeInstances() throws Exception {
+        Path source = root.resolve("Source.java");
+        String sourceText = "class Target {}\nclass Source { Target target; }\n";
+        Files.writeString(source, sourceText, StandardCharsets.UTF_8);
+
+        ResolverResponse response = resolve(source, sourceText, sourceText.lastIndexOf("Target"), List.of(root));
+
+        assertEquals("implementation", response.resolutionKind(), response.toString());
+        // JavaParserFacadeのstaticマップは値がキーを強参照するためWeakHashMapでも
+        // 回収されない。resolveが要求ごとにclearInstances()で空にしていることを、
+        // フィールド名に依存して直接検証する(依存のバージョンアップ時は要再確認)。
+        var instancesField = com.github.javaparser.symbolsolver.javaparsermodel.JavaParserFacade.class
+            .getDeclaredField("instances");
+        instancesField.setAccessible(true);
+        var instances = (java.util.Map<?, ?>) instancesField.get(null);
+        assertTrue(instances.isEmpty(), "JavaParserFacade.instances should be cleared after resolve: " + instances);
+    }
+
+    @Test
+    void repeatedResolvesOnSameResolverSucceed() throws Exception {
+        Path source = root.resolve("Source.java");
+        String sourceText = "class Target {}\nclass Source { Target target; }\n";
+        Files.writeString(source, sourceText, StandardCharsets.UTF_8);
+        JavaSymbolResolver resolver = new JavaSymbolResolver();
+        ResolverRequest request = new ResolverRequest(
+            "resolve",
+            root.toString(),
+            source.toString(),
+            sourceText,
+            sourceText.lastIndexOf("Target"),
+            List.of(),
+            List.of(root.toString()),
+            List.of(),
+            List.of(),
+            null
+        );
+
+        ResolverResponse first = resolver.resolve(request);
+        ResolverResponse second = resolver.resolve(request);
+
+        assertEquals("implementation", first.resolutionKind(), first.toString());
+        assertEquals("implementation", second.resolutionKind(), second.toString());
+        assertEquals(first.target(), second.target());
+    }
+
     private ResolverResponse resolve(Path source, String sourceText, int offset, List<Path> sourceRoots) throws Exception {
         return new JavaSymbolResolver().resolve(new ResolverRequest(
             "resolve",

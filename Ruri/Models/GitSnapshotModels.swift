@@ -302,6 +302,70 @@ nonisolated struct SourceDiffLine: Equatable, Sendable {
     let oldLineNumber: Int?
     let newLineNumber: Int?
     let content: String
+    /// 表示キャップ適用後の等幅カラム数。折り返し表示行数の推定に使うため、
+    /// UI スレッドで都度計測せずパース時に前計算しておく。
+    let displayColumnCount: Int
+
+    init(kind: Kind, oldLineNumber: Int?, newLineNumber: Int?, content: String) {
+        self.kind = kind
+        self.oldLineNumber = oldLineNumber
+        self.newLineNumber = newLineNumber
+        self.content = content
+        self.displayColumnCount = SourceDiffLineDisplay.columnCount(of: content)
+    }
+}
+
+/// 差分行の表示上の長さの取り扱い。レイヤーバックの差分ペインは CA レイヤー
+/// (Metal テクスチャ)上限を超えた部分の描画が破棄されるため、極端な長行は
+/// 表示前に切り詰め、折り返し行数はカラム数から推定する。
+nonisolated enum SourceDiffLineDisplay {
+    /// 1行あたりの表示キャップ(UTF-16 単位)。非折り返し時のペイン幅
+    /// (約7.2pt/字)がレイヤー上限 ~8,192pt を超えないよう抑える。
+    static let maxRenderedLineUTF16Length = 1024
+    static let truncationMarker = "…"
+    /// 描画側の defaultTabInterval(スペース4個分)と一致させること。
+    static let tabDisplayColumnWidth = 4
+
+    /// キャップを適用した表示用文字列。Character 境界を守って切り詰める。
+    static func cappedContent(_ content: String) -> String {
+        let utf16 = content.utf16
+        guard utf16.count > maxRenderedLineUTF16Length else { return content }
+
+        var cut = utf16.index(utf16.startIndex, offsetBy: maxRenderedLineUTF16Length)
+        var boundary = String.Index(cut, within: content)
+        while boundary == nil, cut > utf16.startIndex {
+            cut = utf16.index(before: cut)
+            boundary = String.Index(cut, within: content)
+        }
+        guard let boundary else { return truncationMarker }
+        return String(content[..<boundary]) + truncationMarker
+    }
+
+    /// キャップ適用後の等幅カラム数(タブ = 次の4カラム境界、東アジア全角 = 2)。
+    /// 空行は表示上スペース1個になるため最低1を返す。
+    static func columnCount(of content: String) -> Int {
+        var columns = 0
+        for scalar in cappedContent(content).unicodeScalars {
+            if scalar == "\t" {
+                columns += tabDisplayColumnWidth - columns % tabDisplayColumnWidth
+            } else {
+                columns += isWideScalar(scalar) ? 2 : 1
+            }
+        }
+        return max(1, columns)
+    }
+
+    private static func isWideScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x1100...0x115F, 0x2E80...0x303E, 0x3041...0x33FF, 0x3400...0x4DBF,
+             0x4E00...0x9FFF, 0xA000...0xA4CF, 0xAC00...0xD7A3, 0xF900...0xFAFF,
+             0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6,
+             0x1F300...0x1FAFF, 0x20000...0x3FFFD:
+            true
+        default:
+            false
+        }
+    }
 }
 
 nonisolated struct EditorDiffDecoration: Equatable, Hashable, Sendable {

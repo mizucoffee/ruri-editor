@@ -28,7 +28,22 @@ import java.nio.file.*;
 import java.util.*;
 
 final class JavaSymbolResolver {
+    // 参照検索は1要求で多数のファイルをパースするため、TypeSolverのキャッシュを
+    // 無制限にするとヒープを使い切る。1要求で解決に触れる型数より十分大きい値。
+    private static final long TYPE_SOLVER_CACHE_LIMIT = 1_000;
+
     ResolverResponse resolve(ResolverRequest request) throws IOException {
+        try {
+            return doResolve(request);
+        } finally {
+            // JavaParserFacadeのstaticマップは値(facade)がキー(TypeSolver)を強参照する
+            // ためWeakHashMapでも回収されず、要求ごとのTypeSolverとパース済みASTが
+            // 蓄積してOutOfMemoryErrorに至る。要求単位で必ず破棄する。
+            JavaParserFacade.clearInstances();
+        }
+    }
+
+    private ResolverResponse doResolve(ResolverRequest request) throws IOException {
         if (request == null) {
             throw new IllegalArgumentException("Missing request payload.");
         }
@@ -126,12 +141,16 @@ final class JavaSymbolResolver {
 
     private ResolverRuntime runtime(Path projectPath, List<Path> sourceRoots, List<String> classpath) {
         CombinedTypeSolver typeSolver = new CombinedTypeSolver(new ReflectionTypeSolver(false));
+        // symbol resolverを設定しない素の構成にする(CombinedTypeSolver側の解決と
+        // 再帰しないようにするため)。言語レベルはメインのパーサーと揃える。
+        ParserConfiguration solverConfiguration = new ParserConfiguration()
+            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
         for (Path sourceRoot : sourceRoots) {
             if (!Files.isDirectory(sourceRoot)) {
                 continue;
             }
             try {
-                typeSolver.add(new JavaParserTypeSolver(sourceRoot));
+                typeSolver.add(new JavaParserTypeSolver(sourceRoot, solverConfiguration, TYPE_SOLVER_CACHE_LIMIT));
             } catch (Exception ignored) {
             }
         }

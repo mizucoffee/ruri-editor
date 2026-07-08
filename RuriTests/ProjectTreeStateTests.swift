@@ -513,6 +513,88 @@ final class ProjectTreeStateTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(state.node(at: buildURL)).isIgnored)
     }
 
+    func testRefreshLoadedDirectoriesAppliesNestedSnapshotWithoutIntermediateSnapshot() throws {
+        let rootURL = URL(filePath: "/tmp/project")
+        let outerURL = rootURL.appending(path: "Outer")
+        let innerURL = outerURL.appending(path: "Inner")
+        let oldURL = innerURL.appending(path: "Old.swift")
+        let newURL = innerURL.appending(path: "New.swift")
+        var state = ProjectTreeState()
+        state.reset(to: rootURL)
+        state.replaceRootChildren([
+            FileNode(
+                url: outerURL,
+                name: "Outer",
+                isDirectory: true,
+                children: [
+                    FileNode(
+                        url: innerURL,
+                        name: "Inner",
+                        isDirectory: true,
+                        children: [
+                            FileNode(url: oldURL, name: "Old.swift", isDirectory: false)
+                        ],
+                        isExpanded: true
+                    )
+                ],
+                isExpanded: true
+            )
+        ])
+
+        state.refreshLoadedDirectories([
+            rootURL: [
+                FileNode(url: outerURL, name: "Outer", isDirectory: true)
+            ],
+            innerURL: [
+                FileNode(url: newURL, name: "New.swift", isDirectory: false)
+            ]
+        ])
+
+        let outerNode = try XCTUnwrap(state.node(at: outerURL))
+        let innerNode = try XCTUnwrap(state.node(at: innerURL))
+        XCTAssertTrue(outerNode.isExpanded)
+        XCTAssertTrue(innerNode.isExpanded)
+        XCTAssertEqual(innerNode.children?.map(\.name), ["New.swift"])
+    }
+
+    func testRefreshLoadedDirectoriesKeepsCachedChildrenInPreservedSubtree() throws {
+        let rootURL = URL(filePath: "/tmp/project")
+        let outerURL = rootURL.appending(path: "Outer")
+        let collapsedURL = outerURL.appending(path: "Collapsed")
+        let cachedURL = collapsedURL.appending(path: "Cached.swift")
+        var state = ProjectTreeState()
+        state.reset(to: rootURL)
+        state.replaceRootChildren([
+            FileNode(
+                url: outerURL,
+                name: "Outer",
+                isDirectory: true,
+                children: [
+                    FileNode(
+                        url: collapsedURL,
+                        name: "Collapsed",
+                        isDirectory: true,
+                        children: [
+                            FileNode(url: cachedURL, name: "Cached.swift", isDirectory: false)
+                        ],
+                        isExpanded: false
+                    )
+                ],
+                isExpanded: true
+            )
+        ])
+
+        state.refreshLoadedDirectories([
+            rootURL: [
+                FileNode(url: outerURL, name: "Outer", isDirectory: true)
+            ]
+        ])
+
+        let collapsedNode = try XCTUnwrap(state.node(at: collapsedURL))
+        XCTAssertFalse(collapsedNode.isExpanded)
+        XCTAssertEqual(collapsedNode.children?.map(\.name), ["Cached.swift"])
+    }
+
     private func makeGitSnapshot(rootURL: URL, changes: [GitFileChange]) -> GitRepositorySnapshot {
         GitRepositorySnapshot(
             repositoryRootURL: rootURL,

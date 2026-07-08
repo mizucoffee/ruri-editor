@@ -222,9 +222,9 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         XCTAssertEqual(width, 916)
     }
 
-    func testReviewDiffLayoutEstimatesDocumentHeightFromLineCount() {
+    func testReviewDiffLayoutEstimatesDocumentHeightFromRowCount() {
         let height = ReviewDiffScrollLayout.estimatedDocumentHeight(
-            lineCount: 12,
+            rowCount: 12,
             lineHeight: 18,
             textInsetHeight: 6
         )
@@ -232,9 +232,9 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         XCTAssertEqual(height, 228)
     }
 
-    func testReviewDiffLayoutEstimatesAtLeastOneLine() {
+    func testReviewDiffLayoutEstimatesAtLeastOneRow() {
         let height = ReviewDiffScrollLayout.estimatedDocumentHeight(
-            lineCount: 0,
+            rowCount: 0,
             lineHeight: 18,
             textInsetHeight: 6
         )
@@ -277,19 +277,30 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         ))
     }
 
-    func testUnifiedLineCountMatchesBuiltDocument() {
+    func testUnifiedEstimatedChunkRowCountsMatchBuiltDocuments() {
         let file = mixedRunsFile()
 
-        let document = ReviewDiffRenderedDocument.unified(
-            file: file,
-            oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
-            newFileURL: URL(filePath: "/tmp/repo/App.swift")
-        )
+        for maxRows in [2, 3, 256, Int.max] {
+            let chunks = ReviewDiffRenderedDocument.unifiedDocuments(
+                for: file,
+                oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
+                newFileURL: URL(filePath: "/tmp/repo/App.swift"),
+                columnsPerRow: nil,
+                maxEstimatedRowsPerDocument: maxRows
+            )
+            let estimated = ReviewDiffRenderedDocument.unifiedEstimatedChunkRowCounts(
+                for: file,
+                columnsPerRow: nil,
+                maxEstimatedRowsPerDocument: maxRows
+            )
 
-        XCTAssertEqual(ReviewDiffRenderedDocument.unifiedLineCount(for: file), document.lineCount)
+            XCTAssertEqual(estimated, chunks.map(\.estimatedRowCount), "maxRows: \(maxRows)")
+            // 非折り返しでは推定表示行数 = 論理行数
+            XCTAssertEqual(chunks.map(\.estimatedRowCount), chunks.map(\.lineCount), "maxRows: \(maxRows)")
+        }
     }
 
-    func testSideBySideLineCountMatchesBuiltDocuments() {
+    func testSideBySideEstimatedChunkRowCountsMatchBuiltDocuments() {
         let file = mixedRunsFile()
 
         let oldDocument = ReviewDiffRenderedDocument.sideBySide(
@@ -302,9 +313,14 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
             side: .new,
             fileURL: URL(filePath: "/tmp/repo/App.swift")
         )
+        let estimated = ReviewDiffRenderedDocument.sideBySideEstimatedChunkRowCounts(
+            for: file,
+            columnsPerRow: nil,
+            maxEstimatedRowsPerDocument: Int.max
+        )
 
-        XCTAssertEqual(ReviewDiffRenderedDocument.sideBySideLineCount(for: file), oldDocument.lineCount)
-        XCTAssertEqual(ReviewDiffRenderedDocument.sideBySideLineCount(for: file), newDocument.lineCount)
+        XCTAssertEqual(estimated, [oldDocument.lineCount])
+        XCTAssertEqual(estimated, [newDocument.lineCount])
     }
 
     func testUnifiedDocumentsChunkingPreservesContent() {
@@ -318,7 +334,8 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
             for: file,
             oldFileURL: URL(filePath: "/tmp/repo/App.swift"),
             newFileURL: URL(filePath: "/tmp/repo/App.swift"),
-            maxLinesPerDocument: 2
+            columnsPerRow: nil,
+            maxEstimatedRowsPerDocument: 2
         )
 
         XCTAssertTrue(chunks.allSatisfy { $0.lineCount <= 2 })
@@ -334,29 +351,155 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
             for: file,
             side: .old,
             fileURL: URL(filePath: "/tmp/repo/App.swift"),
-            maxLinesPerDocument: 3
+            columnsPerRow: nil,
+            maxEstimatedRowsPerDocument: 3
         )
         let newChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
             for: file,
             side: .new,
             fileURL: URL(filePath: "/tmp/repo/App.swift"),
-            maxLinesPerDocument: 3
+            columnsPerRow: nil,
+            maxEstimatedRowsPerDocument: 3
         )
 
         XCTAssertEqual(oldChunks.count, newChunks.count)
         XCTAssertEqual(oldChunks.map(\.lineCount), newChunks.map(\.lineCount))
         XCTAssertEqual(
-            oldChunks.reduce(0) { $0 + $1.lineCount },
-            ReviewDiffRenderedDocument.sideBySideLineCount(for: file)
+            oldChunks.map(\.estimatedRowCount),
+            ReviewDiffRenderedDocument.sideBySideEstimatedChunkRowCounts(
+                for: file,
+                columnsPerRow: nil,
+                maxEstimatedRowsPerDocument: 3
+            )
         )
+    }
+
+    func testWrappedSideBySideChunkRowCountsUsePairedRowMax() {
+        // 非対称な長行: 削除側だけ長い行(20カラム)、追加のみの hunk に長行(30カラム)
+        let file = GitReviewFileDiff(diff: SourceFileDiff(
+            oldRelativePath: "App.swift",
+            newRelativePath: "App.swift",
+            hunks: [
+                SourceDiffHunk(
+                    oldStart: 1,
+                    oldLineCount: 3,
+                    newStart: 1,
+                    newLineCount: 2,
+                    lines: [
+                        SourceDiffLine(kind: .context, oldLineNumber: 1, newLineNumber: 1, content: "keep"),
+                        SourceDiffLine(
+                            kind: .deletion,
+                            oldLineNumber: 2,
+                            newLineNumber: nil,
+                            content: String(repeating: "d", count: 20)
+                        ),
+                        SourceDiffLine(kind: .deletion, oldLineNumber: 3, newLineNumber: nil, content: "old"),
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 2, content: "new")
+                    ]
+                ),
+                SourceDiffHunk(
+                    oldStart: 10,
+                    oldLineCount: 0,
+                    newStart: 9,
+                    newLineCount: 1,
+                    lines: [
+                        SourceDiffLine(
+                            kind: .addition,
+                            oldLineNumber: nil,
+                            newLineNumber: 9,
+                            content: String(repeating: "a", count: 30)
+                        )
+                    ]
+                )
+            ]
+        ))
+
+        // ペア行ごとの max(8カラム/行): hunk1 = header(1) + keep(1) + [d×20|new](3)
+        // + [old|欠側](1)、hunk2 = header(1) + [欠側|a×30](4)
+        let expectedTotalRows = 1 + 1 + 3 + 1 + 1 + 4
+
+        for maxRows in [4, Int.max] {
+            let estimated = ReviewDiffRenderedDocument.sideBySideEstimatedChunkRowCounts(
+                for: file,
+                columnsPerRow: 8,
+                maxEstimatedRowsPerDocument: maxRows
+            )
+            let oldChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
+                for: file,
+                side: .old,
+                fileURL: nil,
+                columnsPerRow: 8,
+                maxEstimatedRowsPerDocument: maxRows
+            )
+            let newChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
+                for: file,
+                side: .new,
+                fileURL: nil,
+                columnsPerRow: 8,
+                maxEstimatedRowsPerDocument: maxRows
+            )
+
+            // count-only 推定と構築済みチャンクの厳密一致(プレースホルダ高の不変条件)
+            XCTAssertEqual(estimated, oldChunks.map(\.estimatedRowCount), "maxRows: \(maxRows)")
+            XCTAssertEqual(estimated, newChunks.map(\.estimatedRowCount), "maxRows: \(maxRows)")
+            // 境界・行数の左右一致
+            XCTAssertEqual(oldChunks.map(\.lineCount), newChunks.map(\.lineCount), "maxRows: \(maxRows)")
+            XCTAssertEqual(estimated.reduce(0, +), expectedTotalRows, "maxRows: \(maxRows)")
+            // 折り返し考慮の推定は論理行数以上
+            XCTAssertTrue(
+                zip(oldChunks.map(\.estimatedRowCount), oldChunks.map(\.lineCount)).allSatisfy { $0 >= $1 },
+                "maxRows: \(maxRows)"
+            )
+        }
+
+        // ファイル単位プレースホルダ高 = Σ チャンク推定高
+        let estimated = ReviewDiffRenderedDocument.sideBySideEstimatedChunkRowCounts(
+            for: file,
+            columnsPerRow: 8,
+            maxEstimatedRowsPerDocument: 4
+        )
+        let oldChunks = ReviewDiffRenderedDocument.sideBySideDocuments(
+            for: file,
+            side: .old,
+            fileURL: nil,
+            columnsPerRow: 8,
+            maxEstimatedRowsPerDocument: 4
+        )
+        XCTAssertEqual(
+            ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
+                chunkRowCounts: estimated,
+                lineHeight: 18,
+                textInsetHeight: 6
+            ),
+            oldChunks.reduce(0) { height, chunk in
+                height + ReviewDiffScrollLayout.estimatedDocumentHeight(
+                    rowCount: chunk.estimatedRowCount,
+                    lineHeight: 18,
+                    textInsetHeight: 6
+                )
+            }
+        )
+    }
+
+    func testPairedRowTargetsAndExtraRows() {
+        XCTAssertEqual(ReviewDiffScrollLayout.pairedRowTargets([1, 2, 3], [2, 1, 3]), [2, 2, 3])
+        // 行数不一致(ドキュメント差し替えの過渡状態)は nil
+        XCTAssertNil(ReviewDiffScrollLayout.pairedRowTargets([1, 2], [1, 2, 3]))
+
+        XCTAssertEqual(
+            ReviewDiffScrollLayout.extraRows(natural: [1, 2, 3], target: [2, 2, 3]),
+            [1, 0, 0]
+        )
+        // 目標が実測より小さくても負にはならない
+        XCTAssertEqual(ReviewDiffScrollLayout.extraRows(natural: [3, 1], target: [2, 2]), [0, 1])
     }
 
     func testEstimatedChunkedDocumentHeightMatchesPerChunkSum() {
         let lineHeight: CGFloat = 18
         let inset: CGFloat = 6
-        let perChunk: (Int) -> CGFloat = { lines in
+        let perChunk: (Int) -> CGFloat = { rows in
             ReviewDiffScrollLayout.estimatedDocumentHeight(
-                lineCount: lines,
+                rowCount: rows,
                 lineHeight: lineHeight,
                 textInsetHeight: inset
             )
@@ -364,8 +507,7 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
 
         XCTAssertEqual(
             ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
-                totalLineCount: 10,
-                maxLinesPerDocument: 4,
+                chunkRowCounts: [4, 4, 2],
                 lineHeight: lineHeight,
                 textInsetHeight: inset
             ),
@@ -373,12 +515,196 @@ final class ReviewDiffRenderedDocumentTests: XCTestCase {
         )
         XCTAssertEqual(
             ReviewDiffScrollLayout.estimatedChunkedDocumentHeight(
-                totalLineCount: 3,
-                maxLinesPerDocument: 256,
+                chunkRowCounts: [3],
                 lineHeight: lineHeight,
                 textInsetHeight: inset
             ),
             perChunk(3)
+        )
+    }
+
+    func testSourceDiffLineDisplayColumnCounts() {
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: ""), 1)
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: "abcd"), 4)
+        // タブは次の4カラム境界へ: "ab" (2) + tab (→4) + "c" = 5
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: "ab\tc"), 5)
+        // 行頭タブは4カラム
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: "\tx"), 5)
+        // 東アジア全角は2カラム
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: "あい"), 4)
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: "a漢b"), 4)
+    }
+
+    func testSourceDiffLineDisplayCapsLongLines() {
+        let cap = SourceDiffLineDisplay.maxRenderedLineUTF16Length
+        let short = String(repeating: "x", count: cap)
+        XCTAssertEqual(SourceDiffLineDisplay.cappedContent(short), short)
+
+        let long = String(repeating: "x", count: cap + 500)
+        let capped = SourceDiffLineDisplay.cappedContent(long)
+        XCTAssertEqual(capped.utf16.count, cap + SourceDiffLineDisplay.truncationMarker.utf16.count)
+        XCTAssertTrue(capped.hasSuffix(SourceDiffLineDisplay.truncationMarker))
+        XCTAssertEqual(SourceDiffLineDisplay.columnCount(of: long), cap + 1)
+
+        // Character 境界を壊さない(サロゲートペアをまたぐ切断をしない)
+        let emoji = String(repeating: "😄", count: cap)
+        let cappedEmoji = SourceDiffLineDisplay.cappedContent(emoji)
+        XCTAssertLessThanOrEqual(cappedEmoji.utf16.count, cap + SourceDiffLineDisplay.truncationMarker.utf16.count)
+        XCTAssertFalse(cappedEmoji.unicodeScalars.contains { $0.value == 0xFFFD })
+        XCTAssertTrue(cappedEmoji.dropLast().allSatisfy { $0 == "😄" })
+    }
+
+    func testBuilderCapsRenderedLineContent() {
+        let cap = SourceDiffLineDisplay.maxRenderedLineUTF16Length
+        let longContent = String(repeating: "z", count: cap * 3)
+        let document = ReviewDiffRenderedDocument.unified(
+            file: GitReviewFileDiff(diff: SourceFileDiff(
+                oldRelativePath: nil,
+                newRelativePath: "long.js",
+                hunks: [
+                    SourceDiffHunk(
+                        oldStart: 0,
+                        oldLineCount: 0,
+                        newStart: 1,
+                        newLineCount: 1,
+                        lines: [
+                            SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 1, content: longContent)
+                        ]
+                    )
+                ]
+            )),
+            oldFileURL: nil,
+            newFileURL: URL(filePath: "/tmp/repo/long.js")
+        )
+
+        let renderedLine = document.lines[1]
+        XCTAssertEqual(
+            renderedLine.contentRange.length,
+            cap + SourceDiffLineDisplay.truncationMarker.utf16.count
+        )
+        XCTAssertEqual(NSMaxRange(renderedLine.contentRange), document.text.utf16.count)
+        XCTAssertTrue(document.text.hasSuffix(SourceDiffLineDisplay.truncationMarker))
+        // ナビゲーション用の元の長さは保持する
+        XCTAssertEqual(renderedLine.sourceContentUTF16Length, cap * 3)
+        // 幅計測もキャップ後の内容に基づく
+        XCTAssertLessThanOrEqual(
+            document.maximumCodeWidth,
+            ReviewDiffLayout.codeWidth(for: String(repeating: "z", count: cap + 1))
+        )
+    }
+
+    func testEstimatedWrappedRowsCeilsColumns() {
+        XCTAssertEqual(ReviewDiffScrollLayout.estimatedWrappedRows(columns: 1, columnsPerRow: 80), 1)
+        XCTAssertEqual(ReviewDiffScrollLayout.estimatedWrappedRows(columns: 80, columnsPerRow: 80), 1)
+        XCTAssertEqual(ReviewDiffScrollLayout.estimatedWrappedRows(columns: 81, columnsPerRow: 80), 2)
+        XCTAssertEqual(ReviewDiffScrollLayout.estimatedWrappedRows(columns: 240, columnsPerRow: 80), 3)
+        // 非折り返し(nil)は常に1
+        XCTAssertEqual(ReviewDiffScrollLayout.estimatedWrappedRows(columns: 500, columnsPerRow: nil), 1)
+    }
+
+    func testWrappedChunkPlanKeepsChunksWithinRowBudget() {
+        // 300カラム ≈ 4表示行(80カラム/行) × 100行 + hunkヘッダ
+        let lines = (1...100).map { index in
+            SourceDiffLine(
+                kind: .addition,
+                oldLineNumber: nil,
+                newLineNumber: index,
+                content: String(repeating: "w", count: 300)
+            )
+        }
+        let file = GitReviewFileDiff(diff: SourceFileDiff(
+            oldRelativePath: nil,
+            newRelativePath: "wrapped.md",
+            hunks: [
+                SourceDiffHunk(oldStart: 0, oldLineCount: 0, newStart: 1, newLineCount: 100, lines: lines)
+            ]
+        ))
+
+        let budget = 40
+        let chunks = ReviewDiffRenderedDocument.unifiedDocuments(
+            for: file,
+            oldFileURL: nil,
+            newFileURL: URL(filePath: "/tmp/repo/wrapped.md"),
+            columnsPerRow: 80,
+            maxEstimatedRowsPerDocument: budget
+        )
+
+        // 1行が予算を超えない限り、チャンクの推定表示行数は予算内に収まる
+        XCTAssertTrue(chunks.allSatisfy { $0.estimatedRowCount <= budget })
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertEqual(chunks.reduce(0) { $0 + $1.lineCount }, 101)
+        // 折り返し考慮の推定は論理行数より大きい
+        XCTAssertTrue(chunks.allSatisfy { $0.estimatedRowCount >= $0.lineCount })
+
+        // count-only 推定は構築済みチャンクと厳密一致(プレースホルダ高の不変条件)
+        XCTAssertEqual(
+            ReviewDiffRenderedDocument.unifiedEstimatedChunkRowCounts(
+                for: file,
+                columnsPerRow: 80,
+                maxEstimatedRowsPerDocument: budget
+            ),
+            chunks.map(\.estimatedRowCount)
+        )
+    }
+
+    func testWrappedChunkPlanBoundsSingleOversizedLine() {
+        // キャップ後でも1行で予算超になる長行は単独チャンクに隔離され、
+        // 推定表示行数はキャップ由来の上限で抑えられる
+        let cap = SourceDiffLineDisplay.maxRenderedLineUTF16Length
+        let file = GitReviewFileDiff(diff: SourceFileDiff(
+            oldRelativePath: nil,
+            newRelativePath: "minified.js",
+            hunks: [
+                SourceDiffHunk(
+                    oldStart: 0,
+                    oldLineCount: 0,
+                    newStart: 1,
+                    newLineCount: 2,
+                    lines: [
+                        SourceDiffLine(
+                            kind: .addition,
+                            oldLineNumber: nil,
+                            newLineNumber: 1,
+                            content: String(repeating: "m", count: 50_000)
+                        ),
+                        SourceDiffLine(kind: .addition, oldLineNumber: nil, newLineNumber: 2, content: "tail")
+                    ]
+                )
+            ]
+        ))
+
+        let chunkRowCounts = ReviewDiffRenderedDocument.unifiedEstimatedChunkRowCounts(
+            for: file,
+            columnsPerRow: 100,
+            maxEstimatedRowsPerDocument: 8
+        )
+
+        let cappedRows = (cap + 1 + 99) / 100
+        XCTAssertTrue(chunkRowCounts.allSatisfy { $0 <= max(8, cappedRows) })
+        XCTAssertEqual(chunkRowCounts.reduce(0, +), 1 + cappedRows + 1)
+    }
+
+    func testEstimatedColumnsPerRowAndBucketedPaneWidth() {
+        XCTAssertEqual(ReviewDiffScrollLayout.bucketedPaneWidth(1000), 960)
+        XCTAssertEqual(ReviewDiffScrollLayout.bucketedPaneWidth(960), 960)
+        XCTAssertEqual(ReviewDiffScrollLayout.bucketedPaneWidth(10), 64)
+
+        let columns = ReviewDiffScrollLayout.estimatedColumnsPerRow(
+            paneWidth: 960,
+            gutterWidth: 150,
+            textInsetWidth: 8,
+            characterWidth: 7.5
+        )
+        XCTAssertEqual(columns, Int((960.0 - 150 - 16) / 7.5))
+        // 幅が極端に狭くても最低カラム数を確保する
+        XCTAssertEqual(
+            ReviewDiffScrollLayout.estimatedColumnsPerRow(
+                paneWidth: 64,
+                gutterWidth: 150,
+                textInsetWidth: 8,
+                characterWidth: 7.5
+            ),
+            8
         )
     }
 
